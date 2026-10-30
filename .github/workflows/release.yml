@@ -25,7 +25,7 @@ jobs:
           GOOS: darwin
           GOARCH: arm64
         run: |
-          name="devwatch_${GITHUB_REF_NAME}_darwin_arm64"
+          name="devwatch_darwin_arm64"
           go build -trimpath -ldflags "-s -w" -o devwatch .
           tar -czf "$name.tar.gz" devwatch
           shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256"

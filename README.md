@@ -3,6 +3,15 @@
 Multi-pane terminal dashboard for local development. Watch Postgres query results
 or any shell command (e.g. `pgrep -fl my-api`, `aws --endpoint-url http://localhost:4566 s3 ls`) — all on one screen, driven by a YAML file.
 
+Install (macOS Apple Silicon):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/theikalman/devwatch/main/install.sh | sh
+```
+
+It installs to `~/.local/bin` (override with `BIN_DIR=...`; pin a release with `VERSION=v0.1.0`).
+Then `devwatch -c devwatch.yaml`, or from source:
+
 ```sh
 cp devwatch.example.yaml devwatch.yaml
 go run . -c devwatch.yaml   # q to quit
@@ -41,7 +50,7 @@ its output, with an `ERROR:` line first if it failed. `stream` watchers log one 
 ## Release
 
 Pushing a tag like `v0.1.0` runs `.github/workflows/release.yml`: it vets and tests, builds
-`devwatch_<tag>_darwin_arm64.tar.gz` (macOS Apple Silicon only) with a `.sha256` file, and attaches both to a GitHub release.
+`devwatch_darwin_arm64.tar.gz` (macOS Apple Silicon only) with a `.sha256` file, and attaches both to a GitHub release.
 
 ```sh
 git tag v0.1.0 && git push origin v0.1.0
