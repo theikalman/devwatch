@@ -22,9 +22,17 @@ type result struct {
 	at  time.Time
 }
 
+type change struct {
+	at    time.Time
+	lines []string
+}
+
+const maxHist = 100
+
 type pane struct {
 	result
 	seen bool
+	hist []change // oldest first; rendered newest first
 }
 
 type model struct {
@@ -59,7 +67,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 	case result:
-		m.panes[msg.idx] = pane{msg, true}
+		old := m.panes[msg.idx]
+		p := pane{result: msg, seen: true}
+		p.hist = old.hist
+		if old.seen {
+			if d := lineDiff(old.out, msg.out); d != nil {
+				p.hist = append(p.hist, change{msg.at, d})
+				if len(p.hist) > maxHist {
+					p.hist = p.hist[1:]
+				}
+			}
+		}
+		m.panes[msg.idx] = p
 		return m, poll(m.cfg, msg.idx, m.cfg.Watchers[msg.idx].Interval)
 	}
 	return m, nil
@@ -109,12 +128,32 @@ func (m model) render(i, w, h int) string {
 	if p.seen {
 		head += dim.Render(" " + p.at.Format("15:04:05"))
 	}
-	all := append([]string{head}, strings.Split(body, "\n")...)
+	line := lipgloss.NewStyle().MaxWidth(innerW)
+	out := strings.Split(body, "\n")
+	var diff []string
+	if len(p.hist) > 0 {
+		for k := len(p.hist) - 1; k >= 0; k-- {
+			c := p.hist[k]
+			diff = append(diff, dim.Render("── change "+c.at.Format("15:04:05")+" ──"))
+			for _, l := range c.lines {
+				st := errStyle
+				if strings.HasPrefix(l, "+ ") {
+					st = okStyle
+				}
+				diff = append(diff, st.Render(l))
+			}
+		}
+		// the history block gets at most half of the space below the header; newest first, so the oldest get cut
+		diffH := min(len(diff), max((innerH-1)/2, 2))
+		diff = diff[:diffH]
+		out = out[:min(len(out), max(innerH-1-diffH, 1))]
+	}
+	all := append(append([]string{head}, out...), diff...)
 	if len(all) > innerH {
 		all = all[:innerH]
 	}
 	for j, l := range all {
-		all[j] = lipgloss.NewStyle().MaxWidth(innerW).Render(l)
+		all[j] = line.Render(l)
 	}
 	return lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(color).
 		Padding(0, 1).Width(w - 2).Height(h - 2).Render(strings.Join(all, "\n"))
