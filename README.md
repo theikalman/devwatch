@@ -10,7 +10,7 @@ go run . -c devwatch.yaml   # q to quit
 
 ## Config
 
-Top level: `columns` (default 2) and `watchers`. Every watcher takes `name`, `type`,
+Top level: `columns` (default 2), `log_dir` (optional) and `watchers`. Every watcher takes `name`, `type`,
 `interval` (default 5s) and `timeout` (default 5s).
 
 | type      | fields                                  | unhealthy when                |
@@ -23,3 +23,9 @@ Top level: `columns` (default 2) and `watchers`. Every watcher takes `name`, `ty
 - `main.go` — Bubble Tea model and grid rendering
 - `internal/config` — YAML loading and validation
 - `internal/watcher` — one `Check` per watcher type; add a type by adding a case
+
+## Logging
+
+Set `log_dir` to append every check to `<log_dir>/<watcher name>.log`, one file per watcher.
+Each check is a section headed by `=== YYYY-MM-DD HH:MM:SS ===` (when the check started), followed by
+its output, with an `ERROR:` line first if it failed. Logs grow with every poll and are never rotated.

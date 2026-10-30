@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -45,8 +46,12 @@ type model struct {
 func poll(cfg *config.Config, i int, delay time.Duration) tea.Cmd {
 	return func() tea.Msg {
 		time.Sleep(delay)
+		start := time.Now()
 		out, err := watcher.Check(context.Background(), cfg.Watchers[i])
-		return result{i, out, err, time.Now()}
+		if cfg.LogDir != "" {
+			err = errors.Join(err, appendLog(cfg.LogDir, cfg.Watchers[i].Name, start, out, err))
+		}
+		return result{i, out, err, start}
 	}
 }
 
@@ -166,6 +171,12 @@ func main() {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "config:", err)
 		os.Exit(1)
+	}
+	if cfg.LogDir != "" {
+		if err := os.MkdirAll(cfg.LogDir, 0o755); err != nil {
+			fmt.Fprintln(os.Stderr, "log_dir:", err)
+			os.Exit(1)
+		}
 	}
 	m := model{cfg: cfg, panes: make([]pane, len(cfg.Watchers))}
 	if _, err := tea.NewProgram(m, tea.WithAltScreen()).Run(); err != nil {

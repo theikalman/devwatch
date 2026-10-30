@@ -22,6 +22,7 @@ type Watcher struct {
 
 type Config struct {
 	Columns  int       `yaml:"columns"`
+	LogDir   string    `yaml:"log_dir"` // optional: append every check to <log_dir>/<name>.log
 	Watchers []Watcher `yaml:"watchers"`
 }
 
