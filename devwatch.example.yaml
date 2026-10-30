@@ -1,0 +1,23 @@
+columns: 2
+
+watchers:
+  - name: watch process of autofsd
+    type: command
+    interval: 2s
+    command: pgrep -fl autofsd
+
+  - name: git status
+    type: command
+    interval: 3s
+    command: git status -sb
+
+  - name: users table count
+    type: sql
+    interval: 5s
+    dsn: postgres://postgres:postgres@localhost:5432/app?sslmode=disable
+    query: SELECT COUNT(*) FROM users;
+
+  - name: s3 list objects
+    type: command
+    interval: 5s
+    command: AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test AWS_DEFAULT_REGION=us-east-1 aws --endpoint-url=http://localhost:4566 s3 ls
