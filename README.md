@@ -37,3 +37,12 @@ By default it is not restarted if it exits; set `restart: 3s` to run it again th
 Set `log_dir` to append every check to `<log_dir>/<watcher name>.log`, one file per watcher.
 Each check is a section headed by `=== YYYY-MM-DD HH:MM:SS ===` (when the check started), followed by
 its output, with an `ERROR:` line first if it failed. `stream` watchers log one `[timestamp] line` per line instead. Logs grow with every poll and are never rotated.
+
+## Release
+
+Pushing a tag like `v0.1.0` runs `.github/workflows/release.yml`: it vets and tests, builds
+`devwatch_<tag>_darwin_arm64.tar.gz` (macOS Apple Silicon only) with a `.sha256` file, and attaches both to a GitHub release.
+
+```sh
+git tag v0.1.0 && git push origin v0.1.0
+```

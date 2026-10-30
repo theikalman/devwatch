@@ -1,0 +1,36 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write # create the GitHub release
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - run: go vet ./... && go test ./...
+
+      # Pure Go (no cgo), so macOS arm64 cross-compiles from Linux.
+      - name: Build
+        env:
+          CGO_ENABLED: "0"
+          GOOS: darwin
+          GOARCH: arm64
+        run: |
+          name="devwatch_${GITHUB_REF_NAME}_darwin_arm64"
+          go build -trimpath -ldflags "-s -w" -o devwatch .
+          tar -czf "$name.tar.gz" devwatch
+          shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256"
+
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" devwatch_*.tar.gz* --generate-notes --title "$GITHUB_REF_NAME"
