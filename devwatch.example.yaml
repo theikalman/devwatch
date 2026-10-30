@@ -22,3 +22,8 @@ watchers:
     type: command
     interval: 5s
     command: AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test AWS_DEFAULT_REGION=us-east-1 aws --endpoint-url=http://localhost:4566 s3 ls
+
+  - name: container logs
+    type: stream # long-running; output is appended, not diffed
+    command: podman logs -f --tail 20 my-container
+    restart: 3s # optional: run again 3s after it exits

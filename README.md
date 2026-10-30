@@ -17,6 +17,7 @@ Top level: `columns` (default 2), `log_dir` (optional) and `watchers`. Every wat
 |-----------|-----------------------------------------|-------------------------------|
 | `command` | `command` (run with `sh -c`)            | non-zero exit                 |
 | `sql`     | `dsn`, `query` (Postgres)               | connect/query error           |
+| `stream`  | `command` (long-running, `sh -c`)       | command exits (non-zero = red) |
 
 ## Layout
 
@@ -24,8 +25,15 @@ Top level: `columns` (default 2), `log_dir` (optional) and `watchers`. Every wat
 - `internal/config` — YAML loading and validation
 - `internal/watcher` — one `Check` per watcher type; add a type by adding a case
 
+## Streaming
+
+`stream` runs the command once and keeps it running, e.g. `podman logs -f my-container`.
+stdout+stderr are appended to the pane (last 1000 lines kept, newest at the bottom), with no polling and no diffing.
+By default it is not restarted if it exits; set `restart: 3s` to run it again that long after it exits
+(clean exit or not), with a `── restarted HH:MM:SS ──` marker line between runs. On quit, its whole process group is stopped.
+
 ## Logging
 
 Set `log_dir` to append every check to `<log_dir>/<watcher name>.log`, one file per watcher.
 Each check is a section headed by `=== YYYY-MM-DD HH:MM:SS ===` (when the check started), followed by
-its output, with an `ERROR:` line first if it failed. Logs grow with every poll and are never rotated.
+its output, with an `ERROR:` line first if it failed. `stream` watchers log one `[timestamp] line` per line instead. Logs grow with every poll and are never rotated.

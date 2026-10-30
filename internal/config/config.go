@@ -10,9 +10,10 @@ import (
 
 type Watcher struct {
 	Name     string        `yaml:"name"`
-	Type     string        `yaml:"type"` // command | sql
+	Type     string        `yaml:"type"` // command | sql | stream
 	Interval time.Duration `yaml:"interval"`
 	Timeout  time.Duration `yaml:"timeout"`
+	Restart  time.Duration `yaml:"restart"` // stream: wait this long after exit, then run again; 0 = run once
 
 	Command string `yaml:"command"` // command: run via sh -c
 
@@ -58,7 +59,7 @@ func (c *Config) validate() error {
 		}
 		var missing string
 		switch w.Type {
-		case "command":
+		case "command", "stream": // stream: long-running command (e.g. `podman logs -f x`), output is appended, never diffed
 			if w.Command == "" {
 				missing = "command"
 			}

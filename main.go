@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -34,12 +35,17 @@ type pane struct {
 	result
 	seen bool
 	hist []change // oldest first; rendered newest first
+
+	// stream watchers only
+	lines []string
+	done  bool
 }
 
 type model struct {
 	cfg           *config.Config
 	panes         []pane
 	width, height int
+	events        chan tea.Msg // stream watcher events
 }
 
 // poll runs one check for watcher i, then reports back; Update re-arms it after the interval.
@@ -56,9 +62,11 @@ func poll(cfg *config.Config, i int, delay time.Duration) tea.Cmd {
 }
 
 func (m model) Init() tea.Cmd {
-	cmds := make([]tea.Cmd, len(m.cfg.Watchers))
-	for i := range cmds {
-		cmds[i] = poll(m.cfg, i, 0)
+	cmds := []tea.Cmd{waitEvent(m.events)}
+	for i, w := range m.cfg.Watchers {
+		if w.Type != "stream" {
+			cmds = append(cmds, poll(m.cfg, i, 0))
+		}
 	}
 	return tea.Batch(cmds...)
 }
@@ -71,6 +79,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if s := msg.String(); s == "q" || s == "ctrl+c" {
 			return m, tea.Quit
 		}
+	case streamLine:
+		p := &m.panes[msg.idx]
+		p.seen, p.at = true, msg.at
+		p.lines = append(p.lines, msg.line)
+		if len(p.lines) > maxLines {
+			p.lines = p.lines[len(p.lines)-maxLines:]
+		}
+		return m, waitEvent(m.events)
+	case streamExit:
+		p := &m.panes[msg.idx]
+		p.seen, p.done, p.err = true, true, msg.err
+		return m, waitEvent(m.events)
 	case result:
 		old := m.panes[msg.idx]
 		p := pane{result: msg, seen: true}
@@ -118,6 +138,9 @@ func (m model) View() string {
 func (m model) render(i, w, h int) string {
 	wc, p := m.cfg.Watchers[i], m.panes[i]
 	status, color := dim.Render("…"), lipgloss.Color("8")
+	if wc.Type == "stream" {
+		return m.renderStream(wc, p, w, h)
+	}
 	if p.seen {
 		status, color = okStyle.Render("● OK"), lipgloss.Color("2")
 		if p.err != nil {
@@ -164,6 +187,34 @@ func (m model) render(i, w, h int) string {
 		Padding(0, 1).Width(w - 2).Height(h - 2).Render(strings.Join(all, "\n"))
 }
 
+// renderStream shows the tail of a continuous output; no diffing.
+func (m model) renderStream(wc config.Watcher, p pane, w, h int) string {
+	status, color := okStyle.Render("● LIVE"), lipgloss.Color("2")
+	switch {
+	case p.done && p.err != nil:
+		status, color = errStyle.Render("● EXITED"), lipgloss.Color("1")
+	case p.done:
+		status, color = dim.Render("● EXITED"), lipgloss.Color("8")
+	}
+	innerW, innerH := max(w-4, 1), max(h-2, 1)
+	head := fmt.Sprintf("%s %s", lipgloss.NewStyle().Bold(true).Render(wc.Name), status)
+	if p.seen {
+		head += dim.Render(" " + p.at.Format("15:04:05"))
+	}
+	all := p.lines
+	if p.done && p.err != nil {
+		all = append(append([]string(nil), all...), errStyle.Render(p.err.Error()))
+	}
+	all = all[max(len(all)-(innerH-1), 0):]
+	line := lipgloss.NewStyle().MaxWidth(innerW)
+	rows := []string{head}
+	for _, l := range all {
+		rows = append(rows, line.Render(l))
+	}
+	return lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(color).
+		Padding(0, 1).Width(w - 2).Height(h - 2).Render(strings.Join(rows, "\n"))
+}
+
 func main() {
 	path := flag.String("c", "devwatch.yaml", "config file")
 	flag.Parse()
@@ -178,8 +229,15 @@ func main() {
 			os.Exit(1)
 		}
 	}
-	m := model{cfg: cfg, panes: make([]pane, len(cfg.Watchers))}
-	if _, err := tea.NewProgram(m, tea.WithAltScreen()).Run(); err != nil {
+	ctx, cancel := context.WithCancel(context.Background())
+	var wg sync.WaitGroup
+	events := make(chan tea.Msg, 256)
+	startStreams(ctx, &wg, cfg, events)
+	m := model{cfg: cfg, panes: make([]pane, len(cfg.Watchers)), events: events}
+	_, err = tea.NewProgram(m, tea.WithAltScreen()).Run()
+	cancel()
+	wg.Wait() // stream commands are killed before we exit
+	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
