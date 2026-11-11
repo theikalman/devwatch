@@ -36,6 +36,9 @@ type pane struct {
 	seen bool
 	hist []change // oldest first; rendered newest first
 
+	// lines scrolled away from the default view: down from the top, or up from the bottom for streams
+	scroll int
+
 	// stream watchers only
 	lines []string
 	done  bool
@@ -45,7 +48,29 @@ type model struct {
 	cfg           *config.Config
 	panes         []pane
 	width, height int
+	focus         int          // pane the keyboard scrolls
 	events        chan tea.Msg // stream watcher events
+}
+
+// cell returns the grid shape and the size of one pane.
+func (m model) cell() (cols, rows, w, h int) {
+	cols = min(m.cfg.Columns, len(m.panes))
+	rows = (len(m.panes) + cols - 1) / cols
+	return cols, rows, m.width / cols, (m.height - 1) / rows // -1 for the footer
+}
+
+// viewH is how many body lines fit in a pane h tall: minus border (2) and header (1).
+func viewH(h int) int { return max(h-3, 0) }
+
+// scroll moves pane i's view by d lines (positive = down).
+func (m model) scroll(i, d int) {
+	_, _, _, h := m.cell()
+	p := &m.panes[i]
+	hi := max(len(m.content(i))-viewH(h), 0)
+	if m.cfg.Watchers[i].Type == "stream" {
+		d = -d // streams are anchored to the bottom
+	}
+	p.scroll = max(min(min(p.scroll, hi)+d, hi), 0)
 }
 
 // poll runs one check for watcher i, then reports back; Update re-arms it after the interval.
@@ -76,12 +101,47 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 	case tea.KeyMsg:
-		if s := msg.String(); s == "q" || s == "ctrl+c" {
+		_, _, _, h := m.cell()
+		n := len(m.panes)
+		switch msg.String() {
+		case "q", "ctrl+c":
 			return m, tea.Quit
+		case "tab":
+			m.focus = (m.focus + 1) % n
+		case "shift+tab":
+			m.focus = (m.focus + n - 1) % n
+		case "up", "k":
+			m.scroll(m.focus, -1)
+		case "down", "j":
+			m.scroll(m.focus, 1)
+		case "pgup":
+			m.scroll(m.focus, -viewH(h))
+		case "pgdown":
+			m.scroll(m.focus, viewH(h))
+		case "home":
+			m.scroll(m.focus, -maxLines*maxHist)
+		case "end":
+			m.scroll(m.focus, maxLines*maxHist)
+		}
+	case tea.MouseMsg:
+		d := 0
+		switch msg.Button {
+		case tea.MouseButtonWheelUp:
+			d = -3
+		case tea.MouseButtonWheelDown:
+			d = 3
+		}
+		cols, rows, w, h := m.cell()
+		if c, r := msg.X/max(w, 1), msg.Y/max(h, 1); d != 0 && c < cols && r < rows && r*cols+c < len(m.panes) {
+			m.focus = r*cols + c
+			m.scroll(m.focus, d)
 		}
 	case streamLine:
 		p := &m.panes[msg.idx]
 		p.seen, p.at = true, msg.at
+		if p.scroll > 0 {
+			p.scroll++ // keep the lines being read in place while new ones arrive
+		}
 		p.lines = append(p.lines, msg.line)
 		if len(p.lines) > maxLines {
 			p.lines = p.lines[len(p.lines)-maxLines:]
@@ -94,7 +154,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case result:
 		old := m.panes[msg.idx]
 		p := pane{result: msg, seen: true}
-		p.hist = old.hist
+		p.hist, p.scroll = old.hist, old.scroll
 		if old.seen {
 			if d := lineDiff(old.out, msg.out); d != nil {
 				p.hist = append(p.hist, change{msg.at, d})
@@ -119,9 +179,7 @@ func (m model) View() string {
 	if m.width == 0 {
 		return ""
 	}
-	cols := min(m.cfg.Columns, len(m.panes))
-	rows := (len(m.panes) + cols - 1) / cols
-	w, h := m.width/cols, (m.height-1)/rows // -1 for the footer
+	cols, rows, w, h := m.cell()
 	var lines []string
 	for r := 0; r < rows; r++ {
 		var row []string
@@ -132,86 +190,78 @@ func (m model) View() string {
 		}
 		lines = append(lines, lipgloss.JoinHorizontal(lipgloss.Top, row...))
 	}
-	return lipgloss.JoinVertical(lipgloss.Left, lines...) + "\n" + dim.Render("q: quit")
+	return lipgloss.JoinVertical(lipgloss.Left, lines...) + "\n" + dim.Render("tab: focus pane · ↑/↓ pgup/pgdn home/end wheel: scroll · q: quit")
 }
 
-func (m model) render(i, w, h int) string {
-	wc, p := m.cfg.Watchers[i], m.panes[i]
-	status, color := dim.Render("…"), lipgloss.Color("8")
-	if wc.Type == "stream" {
-		return m.renderStream(wc, p, w, h)
-	}
-	if p.seen {
-		status, color = okStyle.Render("● OK"), lipgloss.Color("2")
-		if p.err != nil {
-			status, color = errStyle.Render("● ERR"), lipgloss.Color("1")
+// content is pane i's body below the header: every line, unclipped.
+func (m model) content(i int) []string {
+	p := m.panes[i]
+	if m.cfg.Watchers[i].Type == "stream" {
+		if p.done && p.err != nil {
+			return append(append([]string(nil), p.lines...), errStyle.Render(p.err.Error()))
 		}
+		return p.lines
 	}
 	body := p.out
 	if p.err != nil {
 		body = strings.TrimSpace(p.err.Error() + "\n" + body)
 	}
-	innerW, innerH := max(w-4, 1), max(h-2, 1) // border + padding
-	head := fmt.Sprintf("%s %s", lipgloss.NewStyle().Bold(true).Render(wc.Name), status)
-	if p.seen {
-		head += dim.Render(" " + p.at.Format("15:04:05"))
-	}
-	line := lipgloss.NewStyle().MaxWidth(innerW)
-	out := strings.Split(body, "\n")
-	var diff []string
-	if len(p.hist) > 0 {
-		for k := len(p.hist) - 1; k >= 0; k-- {
-			c := p.hist[k]
-			diff = append(diff, dim.Render("── change "+c.at.Format("15:04:05")+" ──"))
-			for _, l := range c.lines {
-				st := errStyle
-				if strings.HasPrefix(l, "+ ") {
-					st = okStyle
-				}
-				diff = append(diff, st.Render(l))
+	all := strings.Split(body, "\n")
+	for k := len(p.hist) - 1; k >= 0; k-- { // newest change first
+		c := p.hist[k]
+		all = append(all, dim.Render("── change "+c.at.Format("15:04:05")+" ──"))
+		for _, l := range c.lines {
+			st := errStyle
+			if strings.HasPrefix(l, "+ ") {
+				st = okStyle
 			}
+			all = append(all, st.Render(l))
 		}
-		// the history block gets at most half of the space below the header; newest first, so the oldest get cut
-		diffH := min(len(diff), max((innerH-1)/2, 2))
-		diff = diff[:diffH]
-		out = out[:min(len(out), max(innerH-1-diffH, 1))]
 	}
-	all := append(append([]string{head}, out...), diff...)
-	if len(all) > innerH {
-		all = all[:innerH]
-	}
-	for j, l := range all {
-		all[j] = line.Render(l)
-	}
-	return lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(color).
-		Padding(0, 1).Width(w - 2).Height(h - 2).Render(strings.Join(all, "\n"))
+	return all
 }
 
-// renderStream shows the tail of a continuous output; no diffing.
-func (m model) renderStream(wc config.Watcher, p pane, w, h int) string {
-	status, color := okStyle.Render("● LIVE"), lipgloss.Color("2")
+// render draws pane i as a viewport onto content(i); scroll moves the window.
+func (m model) render(i, w, h int) string {
+	wc, p := m.cfg.Watchers[i], m.panes[i]
+	stream := wc.Type == "stream"
+	status, color := dim.Render("…"), lipgloss.Color("8")
 	switch {
-	case p.done && p.err != nil:
+	case stream && p.done && p.err != nil:
 		status, color = errStyle.Render("● EXITED"), lipgloss.Color("1")
-	case p.done:
-		status, color = dim.Render("● EXITED"), lipgloss.Color("8")
+	case stream && p.done:
+		status = dim.Render("● EXITED")
+	case stream:
+		status, color = okStyle.Render("● LIVE"), lipgloss.Color("2")
+	case p.seen && p.err != nil:
+		status, color = errStyle.Render("● ERR"), lipgloss.Color("1")
+	case p.seen:
+		status, color = okStyle.Render("● OK"), lipgloss.Color("2")
 	}
-	innerW, innerH := max(w-4, 1), max(h-2, 1)
 	head := fmt.Sprintf("%s %s", lipgloss.NewStyle().Bold(true).Render(wc.Name), status)
 	if p.seen {
 		head += dim.Render(" " + p.at.Format("15:04:05"))
 	}
-	all := p.lines
-	if p.done && p.err != nil {
-		all = append(append([]string(nil), all...), errStyle.Render(p.err.Error()))
+	all, vh := m.content(i), viewH(h)
+	top := p.scroll
+	if stream {
+		top = len(all) - vh - p.scroll
 	}
-	all = all[max(len(all)-(innerH-1), 0):]
-	line := lipgloss.NewStyle().MaxWidth(innerW)
-	rows := []string{head}
-	for _, l := range all {
+	top = max(min(top, len(all)-vh), 0)
+	end := min(top+vh, len(all))
+	if len(all) > vh {
+		head += dim.Render(fmt.Sprintf(" ↕ %d-%d/%d", top+1, end, len(all)))
+	}
+	line := lipgloss.NewStyle().MaxWidth(max(w-4, 1)) // border + padding
+	rows := []string{line.Render(head)}
+	for _, l := range all[top:end] {
 		rows = append(rows, line.Render(l))
 	}
-	return lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(color).
+	border := lipgloss.RoundedBorder()
+	if i == m.focus {
+		border = lipgloss.ThickBorder()
+	}
+	return lipgloss.NewStyle().Border(border).BorderForeground(color).
 		Padding(0, 1).Width(w - 2).Height(h - 2).Render(strings.Join(rows, "\n"))
 }
 
@@ -234,7 +284,7 @@ func main() {
 	events := make(chan tea.Msg, 256)
 	startStreams(ctx, &wg, cfg, events)
 	m := model{cfg: cfg, panes: make([]pane, len(cfg.Watchers)), events: events}
-	_, err = tea.NewProgram(m, tea.WithAltScreen()).Run()
+	_, err = tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion()).Run()
 	cancel()
 	wg.Wait() // stream commands are killed before we exit
 	if err != nil {

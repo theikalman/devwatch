@@ -34,6 +34,14 @@ Top level: `columns` (default 2), `log_dir` (optional) and `watchers`. Every wat
 - `internal/config` — YAML loading and validation
 - `internal/watcher` — one `Check` per watcher type; add a type by adding a case
 
+## Scrolling
+
+Each pane is a viewport: when its output is taller than the pane, scroll it (the header shows `↕ first-last/total`).
+The mouse wheel scrolls the pane under the cursor; `tab` / `shift+tab` pick the focused pane (thick border), and
+`↑`/`↓` (or `k`/`j`), `pgup`/`pgdn`, `home`/`end` scroll it. Polled panes start at the top (current output, then the
+change history, newest first); `stream` panes stay on the newest line until you scroll up, and then hold their place as new lines arrive.
+Mouse capture means selecting text needs a modifier (hold `option` in iTerm2/Terminal.app, `shift` elsewhere).
+
 ## Streaming
 
 `stream` runs the command once and keeps it running, e.g. `podman logs -f my-container`.
