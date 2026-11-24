@@ -1,58 +1,61 @@
 package main
 
 import (
-	"fmt"
+	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
-
-	"devwatch/internal/config"
 )
 
-func TestScrollViewport(t *testing.T) {
-	var lines []string
-	for i := 0; i < 20; i++ {
-		lines = append(lines, fmt.Sprintf("l%02d", i))
+func writeConfig(t *testing.T, yaml string) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "devwatch.yaml")
+	if err := os.WriteFile(p, []byte(yaml), 0o600); err != nil {
+		t.Fatal(err)
 	}
-	m := model{
-		cfg:    &config.Config{Columns: 1, Watchers: []config.Watcher{{Name: "s", Type: "stream"}, {Name: "p"}}},
-		panes:  make([]pane, 2),
-		width:  30,
-		height: 11, // two 5-line panes: 2 body lines each
-	}
-	m.panes[0].lines = lines
-	m.panes[1].seen, m.panes[1].out = true, strings.Join(lines, "\n")
+	return p
+}
 
-	show := func(i int) string { _, _, w, h := m.cell(); return m.render(i, w, h) }
-	has := func(s string, want ...string) {
-		t.Helper()
-		for _, l := range lines {
-			if got, exp := strings.Contains(s, l), contains(want, l); got != exp {
-				t.Fatalf("%s: visible=%v want %v in\n%s", l, got, exp, s)
+func TestCheck(t *testing.T) {
+	p := writeConfig(t, `watch:
+  - name: five
+    cmd: echo 5
+    unit: things
+  - name: zero
+    cmd: echo 0
+    expect: "> 0"
+  - name: broken
+    cmd: echo nope >&2; exit 3
+`)
+	var out, errb bytes.Buffer
+	if code := run([]string{"check", "-c", p}, &out, &errb); code != 1 {
+		t.Fatalf("exit %d, want 1\n%s%s", code, &out, &errb)
+	}
+	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+	for i, want := range [][]string{{"NAME", "HEALTH"}, {"five", "number", "ok", "5 things"}, {"zero", "crit"}, {"broken", "error", "exit status 3: nope"}} {
+		for _, w := range want {
+			if i >= len(lines) || !strings.Contains(lines[i], w) {
+				t.Errorf("line %d does not contain %q:\n%s", i, w, &out)
 			}
 		}
 	}
 
-	has(show(0), "l18", "l19") // stream follows the tail
-	has(show(1), "l00", "l01") // polled pane starts at the top
-
-	m.scroll(0, -1)
-	has(show(0), "l17", "l18")
-	m.scroll(0, -1000)
-	has(show(0), "l00", "l01")
-	m.scroll(0, 1) // overshoot above was clamped, so one step down moves exactly one line
-	has(show(0), "l01", "l02")
-
-	m.scroll(1, 1000)
-	has(show(1), "l18", "l19")
-	m.scroll(1, -1)
-	has(show(1), "l17", "l18")
+	ok := writeConfig(t, "watch:\n  - name: five\n    cmd: echo 5\n")
+	if code := run([]string{"check", "-c", ok}, &out, &errb); code != 0 {
+		t.Errorf("all ok: exit %d", code)
+	}
 }
 
-func contains(ss []string, s string) bool {
-	for _, x := range ss {
-		if x == s {
-			return true
-		}
+func TestUsage(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := run([]string{"-h"}, &out, &errb); code != 0 || !strings.Contains(errb.String(), "devwatch check") {
+		t.Errorf("-h: exit %d\n%s", code, &errb)
 	}
-	return false
+	if code := run([]string{"chek"}, &out, &errb); code != 2 {
+		t.Errorf("unknown argument: exit %d", code)
+	}
+	if code := run([]string{"-c", filepath.Join(t.TempDir(), "missing.yaml")}, &out, &errb); code != 1 {
+		t.Errorf("missing config: exit %d", code)
+	}
 }

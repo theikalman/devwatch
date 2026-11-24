@@ -1,0 +1,63 @@
+# devwatch demo: every value kind, using only plain shell commands (no Docker or Postgres needed).
+#
+#   go run . check -c examples/demo.yaml   one pass; exits 1 because some watchers are crit or error on purpose
+#   go run . -c examples/demo.yaml         keeps running and prints each change
+title: devwatch demo
+every: 3s
+
+watch:
+  - name: random number
+    group: numbers
+    cmd: echo $(( $(od -An -N1 -tu1 /dev/urandom) % 30 ))
+    unit: points
+    warn: "> 18"
+    crit: "> 27"
+
+  - name: seconds
+    group: numbers
+    cmd: date +%S
+    every: 1s
+
+  - name: processes
+    group: numbers
+    cmd: ps -A | wc -l
+    unit: processes
+    expect: "> 0"
+
+  - name: clock
+    group: text
+    cmd: date +%H:%M
+
+  - name: kernel
+    group: text
+    cmd: uname -a
+    match: '^(\S+)'
+
+  - name: tick
+    group: structured
+    cmd: |
+      printf '{"tick": %d, "parity": "%s", "arch": "%s"}' "$(( $(date +%s) % 10 ))" "$( [ $(( $(date +%s) % 2 )) -eq 0 ] && echo even || echo odd )" "$(uname -m)"
+
+  - name: tick value
+    group: structured
+    cmd: |
+      printf '{"build": {"tick": %d}}' "$(( $(date +%s) % 10 ))"
+    value: build.tick
+
+  - name: services
+    group: structured
+    as: table
+    cmd: printf 'name\tstate\napi\trunning\nworker\t%s\n' "$( [ $(( $(date +%s) % 20 )) -lt 10 ] && echo running || echo stopped )"
+
+  - name: devwatch port
+    group: probes
+    port: 127.0.0.1:7777 # down until the web UI (M2) listens here
+
+  - name: slow command
+    group: errors
+    cmd: sleep 10
+    timeout: 1s
+
+  - name: failing command
+    group: errors
+    cmd: echo "connection refused" >&2; exit 2

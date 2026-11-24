@@ -1,9 +1,9 @@
-package main
+package value
 
 import "strings"
 
 // lineDiff returns the changed lines between old and new as "- old" / "+ new",
-// or nil when they are identical. shortcut: O(n*m) LCS, fine for pane-sized output.
+// or nil when they are identical. shortcut: O(n*m) LCS; countDiff skips it for huge inputs.
 func lineDiff(old, cur string) []string {
 	if old == cur {
 		return nil
