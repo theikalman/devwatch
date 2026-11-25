@@ -26,10 +26,27 @@ type Engine struct {
 	cfg    *config.Config
 	st     *store.Store
 	report func(Check) // called from the watchers' goroutines
+	runNow map[string]chan struct{}
 }
 
 func New(cfg *config.Config, st *store.Store, report func(Check)) *Engine {
-	return &Engine{cfg, st, report}
+	runNow := make(map[string]chan struct{}, len(cfg.Watch))
+	for _, w := range cfg.Watch {
+		runNow[w.Key] = make(chan struct{}, 1)
+	}
+	return &Engine{cfg, st, report, runNow}
+}
+
+// RunNow asks for an extra check of the watcher with key, right away. It is false for an unknown key.
+func (e *Engine) RunNow(key string) bool {
+	ch, ok := e.runNow[key]
+	if ok {
+		select {
+		case ch <- struct{}{}:
+		default: // one pending request is enough
+		}
+	}
+	return ok
 }
 
 // Run checks every watcher until ctx is cancelled, pruning history older than cfg.Keep every 5 minutes.
@@ -77,6 +94,8 @@ func (e *Engine) loop(ctx context.Context, w *config.Watcher, id int64, t *track
 		case <-ctx.Done():
 			return
 		case <-timer.C:
+		case <-e.runNow[w.Key]:
+			timer.Stop()
 		}
 		start := time.Now()
 		v, err := source.Fetch(ctx, *w)
@@ -126,7 +145,8 @@ func (t *tracker) next(v value.Value, ferr error, w *config.Watcher, at time.Tim
 	if ferr != nil {
 		s.Health, s.Error = value.Error, ferr.Error()
 	} else {
-		s.Health, s.Num = value.Health(v, w.WarnRule, w.CritRule, w.ExpectRule), v.Num
+		s.Health, s.Why = value.Health(v, w.WarnRule, w.CritRule, w.ExpectRule)
+		s.Num = v.Num
 		if raw := v.JSON(); t.val == nil || v.Kind != t.val.Kind || !bytes.Equal(raw, t.raw) {
 			s.Kind, s.Value = v.Kind, raw
 		}

@@ -82,20 +82,20 @@ func (r *Rule) Match(v Value) bool {
 	return false
 }
 
-// Health decides a value's health: a down probe or an unmet expect is crit, then crit, then warn.
-// Any rule may be nil.
-func Health(v Value, warn, crit, expect *Rule) string {
+// Health decides a value's health and, when it isn't OK, why: a down probe or an unmet expect is crit,
+// then crit, then warn. Any rule may be nil.
+func Health(v Value, warn, crit, expect *Rule) (health, why string) {
 	if p, ok := v.Data.(ProbeData); ok && !p.Up {
-		return Crit
+		return Crit, "it is down"
 	}
 	if expect != nil && !expect.Match(v) {
-		return Crit
+		return Crit, "expect " + expect.String() + " is not met"
 	}
 	if crit != nil && crit.Match(v) {
-		return Crit
+		return Crit, "it matches crit " + crit.String()
 	}
 	if warn != nil && warn.Match(v) {
-		return Warn
+		return Warn, "it matches warn " + warn.String()
 	}
-	return OK
+	return OK, ""
 }

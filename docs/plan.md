@@ -272,7 +272,7 @@ and visuals. This section records the decisions behind it.
 
 - **Top bar:** brand, project `title`, config file and watcher count; health counts (click one to filter); a filter field (`/`);
   a live indicator. The tab title becomes `✖1 ▲1 · checkout-service`, so a background tab still shows trouble.
-- **Grid:** groups and cards in config order, `repeat(auto-fill, minmax(240px, 1fr))`, gap 16. Wide kinds (`table`, `row`,
+- **Grid:** groups and cards in config order, `repeat(auto-fill, minmax(280px, 1fr))`, gap 16 (240 px, as first drawn, wrapped the footer and delta). Wide kinds (`table`, `row`,
   `containers`, `json`) span two columns. Under 720 px: one column, nothing spans, and tables scroll inside their card.
 - **Card:** source icon (sql: database, docker: box, http: globe, cmd: terminal, port: plug); the name, plus a mono source line
   (`postgres.count · orders`); health pill; the kind's body; and a footer with "checked 2s ago · 14 ms · every 5s" and a 44 px run-now button.
@@ -332,9 +332,9 @@ internal/config/        schema, shorthand, presets.go, ${vars}, validation with 
 internal/source/        cmd.go sql.go http.go docker.go port.go — Fetch(ctx, w) (value.Value, error)
 internal/value/         kinds, extraction, inference, thresholds, change summaries
 internal/store/         schema, insert, history and feed queries, retention
-internal/engine/        per-watcher loops, run-now, hot reload, hub
-internal/server/        routes, SSE, Host/Origin checks, redaction, embed
-web/                    index.html, app.js, cards/*.js, tokens.css, style.css, vendor/ (preact, htm, fonts)
+internal/engine/        per-watcher loops, run-now, hot reload
+internal/server/        hub, routes, SSE, Host/Origin checks, redaction
+web/                    index.html, app.js, cards.js, drawer.js, ui.js, format.js, tokens.css, style.css, web.go (embed), vendor/
 examples/demo.yaml      every kind using plain shell commands only (no Docker or Postgres needed)
 ```
 
@@ -367,7 +367,7 @@ Presets live inside `config` because expanding them is part of loading the confi
 |---|---|---|
 | **M0 Fresh start** | Tag the current `main` as `v0-tui`, then on a `v2` branch delete the old code (keep `LICENSE`, `install.sh`, the release workflow), create the new layout, `go mod tidy` | `go build` passes, `devwatch --help` works. **Done** |
 | **M1 Core, no UI** | Long-form config, `cmd` + `port` sources, kinds `number`/`text`/`json`/`table`/`probe`, thresholds, SQLite store, engine, `devwatch check`; plain `devwatch` prints each change until M2 | `devwatch check -c examples/demo.yaml` prints typed values; tests pass. **Done** |
-| **M2 Realtime UI** | Server, SSE, `tokens.css` and vendored fonts, cards for M1's kinds with every state, changes feed, drawer with history, run-now, filter, banners, tab title | Demo matches the Claude Design artboards in light and dark and works at phone width; changing a demo value updates the card and the feed within one interval |
+| **M2 Realtime UI** | Server, SSE, `tokens.css` and vendored fonts, cards for M1's kinds with every state, changes feed, drawer with history, run-now, filter, banners, tab title | Demo matches the Claude Design artboards in light and dark and works at phone width; changing a demo value updates the card and the feed within one interval. **Done**, except the config-error banner, which needs M4's hot reload |
 | **M3 Real sources** | `sql` (Postgres, SQLite), `http`, `docker` (Docker/Colima/Podman), kinds `row` and `containers` | Against a local compose stack (Postgres + an API), every source shows values; stopping a container flips its card and logs a change |
 | **M4 Easy config** | Shorthand, preset catalog, `${vars}`/env, positioned errors, `devwatch presets`, `devwatch init`, hot reload | A config of only preset one-liners works; editing the YAML updates the dashboard without a restart; a typo shows a banner with `file:line` |
 | **M5 Ship** | README rewrite, check binary size and the `CGO_ENABLED=0` build, tag `v1.0.0` | `install.sh` installs a working v1 |

@@ -50,6 +50,7 @@ type Sample struct {
 	Value   []byte     // canonical JSON, only when the value changed
 	Summary string     // only when Changed
 	Error   string
+	Why     string // why the health isn't OK; not stored
 }
 
 // Last is a watcher's state at its newest sample, so change detection carries across restarts.

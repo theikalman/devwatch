@@ -8,14 +8,20 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
+	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
+	"runtime"
 	"sync"
 	"syscall"
 	"text/tabwriter"
+	"time"
 
 	"devwatch/internal/config"
 	"devwatch/internal/engine"
+	"devwatch/internal/server"
 	"devwatch/internal/source"
 	"devwatch/internal/store"
 	"devwatch/internal/value"
@@ -24,8 +30,8 @@ import (
 const usage = `devwatch watches local state while you debug.
 
 Usage:
-  devwatch [-c FILE]         run every watcher and print each change
-  devwatch check [-c FILE]   run every watcher once and print the results; exit 1 on error or crit
+  devwatch [-c FILE] [--addr ADDR] [--open]   run every watcher and serve the live dashboard
+  devwatch check [-c FILE]                    run every watcher once and print the results; exit 1 on error or crit
 
 Flags:
 `
@@ -41,6 +47,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	fs.Usage = func() { fmt.Fprint(stderr, usage); fs.PrintDefaults() }
 	path := fs.String("c", "devwatch.yaml", "config file")
+	addr := fs.String("addr", "127.0.0.1:7777", "address for the dashboard; anything but loopback exposes it to your network")
+	open := fs.Bool("open", false, "open the dashboard in the browser")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
@@ -60,7 +68,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if sub == "check" {
 		return check(cfg, stdout)
 	}
-	return watch(cfg, stdout, stderr)
+	return serve(cfg, *path, *addr, *open, stdout, stderr)
 }
 
 // check runs every watcher once, all at the same time, and prints one line each in config order.
@@ -78,7 +86,7 @@ func check(cfg *config.Config, out io.Writer) int {
 			v, err := source.Fetch(context.Background(), *w)
 			h := value.Error
 			if err == nil {
-				h = value.Health(v, w.WarnRule, w.CritRule, w.ExpectRule)
+				h, _ = value.Health(v, w.WarnRule, w.CritRule, w.ExpectRule)
 			}
 			results[i] = result{v, err, h}
 		})
@@ -105,30 +113,78 @@ func check(cfg *config.Config, out io.Writer) int {
 	return code
 }
 
-// watch runs the engine until interrupted and prints each change.
-// shortcut: terminal output only; M2 serves the web UI from here.
-func watch(cfg *config.Config, stdout, stderr io.Writer) int {
+// serve runs every watcher and serves the dashboard until interrupted. Each change is also printed.
+func serve(cfg *config.Config, path, addr string, open bool, stdout, stderr io.Writer) int {
 	st, err := store.Open(cfg.DB)
 	if err != nil {
 		fmt.Fprintln(stderr, "db:", err)
 		return 1
 	}
 	defer st.Close()
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-	fmt.Fprintf(stdout, "devwatch: %d watchers, history in %s. Ctrl+C to stop.\n", len(cfg.Watch), cfg.DB)
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		fmt.Fprintf(stderr, "listen: %v\n(is devwatch already running? pick another address with --addr)\n", err)
+		return 1
+	}
+
+	var srv *server.Server
 	var mu sync.Mutex
-	err = engine.New(cfg, st, func(c engine.Check) {
+	eng := engine.New(cfg, st, func(c engine.Check) {
+		srv.Report(c.Watcher.Key, c.Sample)
 		if !c.Sample.Changed {
 			return
 		}
 		mu.Lock()
 		defer mu.Unlock()
 		fmt.Fprintf(stdout, "%s  %-5s  %-24s  %s\n", c.Sample.At.Format("15:04:05"), c.Sample.Health, c.Watcher.Name, c.Sample.Summary)
-	}).Run(ctx)
+	})
+	tcp, _ := ln.Addr().(*net.TCPAddr)
+	if srv, err = server.New(cfg, path, st, eng.RunNow, tcp != nil && tcp.IP.IsLoopback()); err != nil {
+		ln.Close()
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	hs := &http.Server{Handler: srv.Handler(), ReadHeaderTimeout: 5 * time.Second}
+	hs.RegisterOnShutdown(srv.Close) // event streams never go idle on their own
+	go hs.Serve(ln)
+
+	url := "http://" + ln.Addr().String()
+	if tcp != nil && tcp.IP.IsUnspecified() {
+		url = fmt.Sprintf("http://localhost:%d", tcp.Port)
+	}
+	fmt.Fprintf(stdout, "devwatch: %d watchers on %s · history in %s · Ctrl+C to stop\n", len(cfg.Watch), url, cfg.DB)
+	if open {
+		openBrowser(url, stderr)
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	done := make(chan error, 1)
+	go func() { done <- eng.Run(ctx) }()
+	select {
+	case <-ctx.Done():
+		err = <-done
+	case err = <-done: // the engine could not start
+	}
+	shutdown, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	hs.Shutdown(shutdown)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
 	return 0
+}
+
+func openBrowser(url string, stderr io.Writer) {
+	name := "xdg-open"
+	if runtime.GOOS == "darwin" {
+		name = "open"
+	}
+	cmd := exec.Command(name, url)
+	if err := cmd.Start(); err != nil {
+		fmt.Fprintf(stderr, "open browser: %v\n", err)
+		return
+	}
+	go cmd.Wait()
 }

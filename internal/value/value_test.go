@@ -149,11 +149,14 @@ func TestHealth(t *testing.T) {
 		{NewProbe(ProbeData{Reason: "connection refused"}, nil), Crit},
 	}
 	for _, tt := range tests {
-		if got := Health(tt.v, warn, crit, expect); got != tt.want {
-			t.Errorf("Health(%s) = %s, want %s", tt.v, got, tt.want)
+		if got, why := Health(tt.v, warn, crit, expect); got != tt.want || (why == "") != (got == OK) {
+			t.Errorf("Health(%s) = %s %q, want %s", tt.v, got, why, tt.want)
 		}
 	}
-	if got := Health(NewProbe(ProbeData{Up: true}, nil), nil, nil, nil); got != OK {
+	if _, why := Health(NewNumber(0), warn, crit, expect); why != "expect > 0 is not met" {
+		t.Errorf("why = %q", why)
+	}
+	if got, _ := Health(NewProbe(ProbeData{Up: true}, nil), nil, nil, nil); got != OK {
 		t.Errorf("up probe without rules = %s", got)
 	}
 }

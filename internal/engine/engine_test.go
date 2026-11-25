@@ -88,3 +88,42 @@ func TestRunRecordsAndResumes(t *testing.T) {
 		}
 	}
 }
+
+func TestRunNow(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "devwatch.yaml")
+	if err := os.WriteFile(p, []byte("every: 1h\nwatch:\n  - name: five\n    cmd: echo 5\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := store.Open(cfg.DB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	checks := make(chan Check, 10)
+	e := New(cfg, st, func(c Check) { checks <- c })
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error)
+	go func() { done <- e.Run(ctx) }()
+	defer func() { cancel(); <-done }()
+
+	wait := func(what string) {
+		t.Helper()
+		select {
+		case <-checks:
+		case <-time.After(3 * time.Second):
+			t.Fatalf("no check %s", what)
+		}
+	}
+	wait("at start")
+	if e.RunNow("nope") {
+		t.Error("RunNow accepted an unknown key")
+	}
+	if !e.RunNow("five") {
+		t.Fatal("RunNow refused a known key")
+	}
+	wait("after RunNow, though the interval is an hour")
+}
