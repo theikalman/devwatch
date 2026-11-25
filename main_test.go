@@ -2,10 +2,12 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func writeConfig(t *testing.T, yaml string) string {
@@ -57,5 +59,43 @@ func TestUsage(t *testing.T) {
 	}
 	if code := run([]string{"-c", filepath.Join(t.TempDir(), "missing.yaml")}, &out, &errb); code != 1 {
 		t.Errorf("missing config: exit %d", code)
+	}
+}
+
+func TestWatchConfig(t *testing.T) {
+	p := writeConfig(t, "watch: []\n")
+	changes := make(chan struct{}, 10)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go watchConfig(ctx, p, 10*time.Millisecond, func() { changes <- struct{}{} })
+	time.Sleep(50 * time.Millisecond)
+	select {
+	case <-changes:
+		t.Fatal("reported a change before any edit")
+	default:
+	}
+	os.WriteFile(p, []byte("watch: [edited]\n"), 0o600)
+	select {
+	case <-changes:
+	case <-time.After(2 * time.Second):
+		t.Fatal("an edit went unnoticed")
+	}
+}
+
+func TestPresetsAndInit(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := run([]string{"presets"}, &out, &errb); code != 0 || !strings.Contains(out.String(), "- postgres.count: users") {
+		t.Errorf("presets: exit %d\n%s", code, &out)
+	}
+	p := filepath.Join(t.TempDir(), "devwatch.yaml")
+	if code := run([]string{"init", "-c", p}, &out, &errb); code != 0 {
+		t.Fatalf("init: exit %d\n%s", code, &errb)
+	}
+	os.WriteFile(p, []byte("mine"), 0o644)
+	if code := run([]string{"init", "-c", p}, &out, &errb); code != 1 {
+		t.Errorf("init over an existing file: exit %d", code)
+	}
+	if b, _ := os.ReadFile(p); string(b) != "mine" {
+		t.Errorf("init replaced the existing file")
 	}
 }

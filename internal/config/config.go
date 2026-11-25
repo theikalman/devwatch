@@ -5,7 +5,6 @@ import (
 	"cmp"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"net/url"
 	"os"
@@ -15,18 +14,17 @@ import (
 	"strings"
 	"time"
 
-	"gopkg.in/yaml.v3"
-
 	"devwatch/internal/value"
 )
 
 type Config struct {
-	Title   string        `yaml:"title"`
-	Every   time.Duration `yaml:"every"`   // default check interval
-	Timeout time.Duration `yaml:"timeout"` // default check timeout
-	Keep    time.Duration `yaml:"keep"`    // history retention
-	DB      string        `yaml:"db"`      // SQLite file, relative to the config file
-	Watch   []Watcher     `yaml:"watch"`
+	Title   string            `yaml:"title"`
+	Every   time.Duration     `yaml:"every"`   // default check interval
+	Timeout time.Duration     `yaml:"timeout"` // default check timeout
+	Keep    time.Duration     `yaml:"keep"`    // history retention
+	DB      string            `yaml:"db"`      // SQLite file, relative to the config file
+	Vars    map[string]string `yaml:"vars"`    // ${name} values; the environment fills the rest
+	Watch   []Watcher         `yaml:"-"`       // read entry by entry, so presets and errors can be placed
 
 	Dir string `yaml:"-"` // directory of the config file; relative paths resolve against it
 }
@@ -102,34 +100,8 @@ func (w *Watcher) sources() (s []string) {
 	return s
 }
 
-// Load reads and validates a config file. Unknown fields are errors, so typos don't pass silently.
-func Load(path string) (*Config, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	dec := yaml.NewDecoder(f)
-	dec.KnownFields(true)
-	var c Config
-	if err := dec.Decode(&c); err != nil {
-		if errors.Is(err, io.EOF) {
-			return nil, fmt.Errorf("%s: file is empty", path)
-		}
-		return nil, fmt.Errorf("%s: %w", path, err)
-	}
-	abs, err := filepath.Abs(path)
-	if err != nil {
-		return nil, err
-	}
-	c.Dir = filepath.Dir(abs)
-	if err := c.validate(); err != nil {
-		return nil, fmt.Errorf("%s: %w", path, err)
-	}
-	return &c, nil
-}
-
-func (c *Config) validate() error {
+// defaults fills in the settings that were left out.
+func (c *Config) defaults() {
 	c.Every = orDefault(c.Every, 5*time.Second)
 	c.Timeout = orDefault(c.Timeout, 5*time.Second)
 	c.Keep = orDefault(c.Keep, 24*time.Hour)
@@ -137,27 +109,6 @@ func (c *Config) validate() error {
 		c.DB = filepath.Join(".devwatch", "data.db")
 	}
 	c.DB = c.abs(c.DB)
-	if len(c.Watch) == 0 {
-		return errors.New("no watchers under watch:")
-	}
-	seen := map[string]string{}
-	for i := range c.Watch {
-		w := &c.Watch[i]
-		if w.Name == "" {
-			return fmt.Errorf("watch #%d: name is required", i+1)
-		}
-		if w.Key = slug(w.Name); w.Key == "" {
-			return fmt.Errorf("watcher %q: name needs a letter or digit", w.Name)
-		}
-		if other, ok := seen[w.Key]; ok {
-			return fmt.Errorf("watcher %q: name is too close to %q (both become %q)", w.Name, other, w.Key)
-		}
-		seen[w.Key] = w.Name
-		if err := w.validate(c); err != nil {
-			return fmt.Errorf("watcher %q: %w", w.Name, err)
-		}
-	}
-	return nil
 }
 
 func (w *Watcher) validate(c *Config) error {

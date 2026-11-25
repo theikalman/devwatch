@@ -154,7 +154,7 @@ knows presets exist. Each has a doc line and an example that `devwatch presets` 
 | `docker.running` | — | `filter`, `socket` | count of running containers | number |
 | `http.health` | url | `status` (2xx) | up/down, code, latency | probe |
 | `http.json` | url | `path`, `headers` | one value from a JSON response | number/text |
-| `process` | pattern | — | `pgrep -f … \| wc -l` (macOS `pgrep` has no `-c`); crit when 0 | number |
+| `process` | pattern | — | processes whose command line contains the pattern (`ps` + `awk`; `pgrep` sees nothing under some sandboxed launchers); crit when 0 | number |
 | `git.branch` | — | `dir` | current branch | text |
 | `s3.count` | bucket | `prefix`, `endpoint` (LocalStack default) | object count via `aws s3 ls --recursive` | number |
 
@@ -370,7 +370,7 @@ Presets live inside `config` because expanding them is part of loading the confi
 | **M1 Core, no UI** | Long-form config, `cmd` + `port` sources, kinds `number`/`text`/`json`/`table`/`probe`, thresholds, SQLite store, engine, `devwatch check`; plain `devwatch` prints each change until M2 | `devwatch check -c examples/demo.yaml` prints typed values; tests pass. **Done** |
 | **M2 Realtime UI** | Server, SSE, `tokens.css` and vendored fonts, cards for M1's kinds with every state, changes feed, drawer with history, run-now, filter, banners, tab title | Demo matches the Claude Design artboards in light and dark and works at phone width; changing a demo value updates the card and the feed within one interval. **Done**, except the config-error banner, which needs M4's hot reload |
 | **M3 Real sources** | `sql` (Postgres, SQLite), `http`, `docker` (Docker/Colima/Podman), kinds `row` and `containers` | Against a local compose stack (Postgres + an API), every source shows values; stopping a container flips its card and logs a change. **Done** (Podman 6.1, Postgres 15, MockServer) |
-| **M4 Easy config** | Shorthand, preset catalog, `${vars}`/env, positioned errors, `devwatch presets`, `devwatch init`, hot reload | A config of only preset one-liners works; editing the YAML updates the dashboard without a restart; a typo shows a banner with `file:line` |
+| **M4 Easy config** | Shorthand, preset catalog, `${vars}`/env, positioned errors, `devwatch presets`, `devwatch init`, hot reload | A config of only preset one-liners works; editing the YAML updates the dashboard without a restart; a typo shows a banner with `file:line`. **Done**; on each edit every watcher restarts (each resumes from the store), and `docker.running` was left out: `docker: {label: …}` shows the running count already |
 | **M5 Ship** | README rewrite, check binary size and the `CGO_ENABLED=0` build, tag `v1.0.0` | `install.sh` installs a working v1 |
 
 ## Later (not v1)

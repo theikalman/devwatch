@@ -17,13 +17,15 @@ function mergeFeed(a, b) {
     .slice(0, FEED_MAX)
 }
 
-const initial = { connected: false, seen: false, title: '', config: '', watchers: [], feed: [], more: false, running: {} }
+const initial = { connected: false, seen: false, title: '', config: '', configError: '', watchers: [], feed: [], more: false, running: {} }
 
 // reduce mirrors the server hub: a sample event updates its watcher the same way there and here.
 function reduce(s, a) {
   switch (a.type) {
     case 'snapshot':
-      return { ...s, connected: true, seen: true, title: a.data.title, config: a.data.config, watchers: a.data.watchers, running: {} }
+      return { ...s, connected: true, seen: true, title: a.data.title, config: a.data.config, configError: a.data.config_error || '', watchers: a.data.watchers, running: {} }
+    case 'configError':
+      return { ...s, configError: a.message }
     case 'down':
       return { ...s, connected: false }
     case 'feed':
@@ -87,6 +89,7 @@ function App() {
         .catch(() => {})
     })
     es.addEventListener('sample', e => dispatch({ type: 'sample', data: JSON.parse(e.data) }))
+    es.addEventListener('config_error', e => dispatch({ type: 'configError', message: JSON.parse(e.data).message }))
     es.onerror = () => dispatch({ type: 'down' })
     return () => es.close()
   }, [])
@@ -169,6 +172,9 @@ function App() {
     ${!s.connected && s.seen && html`
       <div class="banner" role="status"><${Icon} name="run" /><strong>Reconnecting to devwatch…</strong>
         <span>Values shown are from ${lastAt ? clock(lastAt) : 'before the connection dropped'} and may be out of date.</span></div>`}
+    ${s.configError && html`
+      <div class="banner error" role="alert"><${Icon} name="error" /><strong>Config not reloaded</strong>
+        <span class="mono msg">${s.configError}</span><span>Still running the previous config; fix the file and it reloads.</span></div>`}
     <div class="page">
       <main class="main">
         ${groups.map(g => html`<section class="group" key=${g.name}>

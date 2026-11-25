@@ -1,0 +1,29 @@
+# devwatch config. Run `devwatch` next to this file, then open http://127.0.0.1:7777.
+# `devwatch presets` lists every preset and its settings.
+title: my project
+every: 5s
+
+watch:
+  # Is the API up? Down shows as crit, with the reason.
+  - http.health: http://localhost:8080/health
+
+  - name: postgres port
+    port: localhost:5432
+
+  - git.branch:
+
+  # Postgres: set DATABASE_URL in your environment, or add dsn: postgres://user:pass@localhost:5432/db
+  # - postgres.count: users
+  # - postgres.row: {table: orders, where: "id = 42"}
+  # - postgres.activity:
+
+  # Containers, through Docker, Colima or Podman:
+  # - docker.compose: my-project
+  # - docker.container: my-api
+
+  # Any command: its output becomes a number, text, JSON or a table.
+  # - name: queue depth
+  #   cmd: redis-cli llen jobs
+  #   warn: "> 100"
+
+  # YAML traps: quote names with " #" in them ("order #42"), and values that contain ": " or start with > or |.

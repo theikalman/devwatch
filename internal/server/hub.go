@@ -70,10 +70,45 @@ type hub struct {
 	byKey    map[string]*watcherJSON
 	subs     map[chan []byte]struct{}
 	closed   bool
+	cfgErr   string // why the last edit of the config wasn't loaded; "" once one loads
 }
 
 func newHub(cfg *config.Config, st *store.Store, ids map[string]int64, configName string) (*hub, error) {
-	h := &hub{title: cfg.Title, config: configName, byKey: map[string]*watcherJSON{}, subs: map[chan []byte]struct{}{}}
+	ws, err := loadWatchers(cfg, st, ids)
+	if err != nil {
+		return nil, err
+	}
+	h := &hub{config: configName, subs: map[chan []byte]struct{}{}}
+	h.set(cfg.Title, ws)
+	return h, nil
+}
+
+func (h *hub) set(title string, ws []*watcherJSON) {
+	h.title, h.watchers, h.byKey, h.cfgErr = title, ws, map[string]*watcherJSON{}, ""
+	for _, w := range ws {
+		h.byKey[w.Key] = w
+	}
+}
+
+// reset swaps in the watchers of a reloaded config and sends every browser a fresh snapshot.
+func (h *hub) reset(title string, ws []*watcherJSON) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.set(title, ws)
+	h.broadcast(h.snapshot())
+}
+
+// configError tells every browser, now and later, why the edited config wasn't loaded.
+func (h *hub) configError(msg string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.cfgErr = msg
+	h.broadcast(frame("config_error", map[string]string{"message": msg}))
+}
+
+// loadWatchers builds each watcher's card state from its stored history.
+func loadWatchers(cfg *config.Config, st *store.Store, ids map[string]int64) ([]*watcherJSON, error) {
+	var out []*watcherJSON
 	for i := range cfg.Watch {
 		w := &cfg.Watch[i]
 		id := ids[w.Key]
@@ -110,10 +145,9 @@ func newHub(cfg *config.Config, st *store.Store, ids map[string]int64, configNam
 		if !since.IsZero() {
 			ws.ErrorSince = since.UnixMilli()
 		}
-		h.watchers = append(h.watchers, ws)
-		h.byKey[w.Key] = ws
+		out = append(out, ws)
 	}
-	return h, nil
+	return out, nil
 }
 
 // lastOf keeps what a card's "last check" needs: the value travels separately.
@@ -151,6 +185,11 @@ func (h *hub) report(key string, s store.Sample) {
 	case w.ErrorSince == 0:
 		w.ErrorSince = ev.At
 	}
+	h.broadcast(msg)
+}
+
+// broadcast sends msg to every browser; the caller holds h.mu.
+func (h *hub) broadcast(msg []byte) {
 	for ch := range h.subs {
 		select {
 		case ch <- msg:
@@ -159,6 +198,16 @@ func (h *hub) report(key string, s store.Sample) {
 			close(ch)
 		}
 	}
+}
+
+// snapshot is the whole dashboard as one event; the caller holds h.mu.
+func (h *hub) snapshot() []byte {
+	return frame("snapshot", struct {
+		Title       string         `json:"title"`
+		Config      string         `json:"config"`
+		ConfigError string         `json:"config_error,omitempty"`
+		Watchers    []*watcherJSON `json:"watchers"`
+	}{h.title, h.config, h.cfgErr, h.watchers})
 }
 
 // subscribe returns the current snapshot and a channel of the events after it; cancel stops them.
@@ -171,12 +220,7 @@ func (h *hub) subscribe() (snapshot []byte, events <-chan []byte, cancel func())
 	} else {
 		h.subs[ch] = struct{}{}
 	}
-	snap := frame("snapshot", struct {
-		Title    string         `json:"title"`
-		Config   string         `json:"config"`
-		Watchers []*watcherJSON `json:"watchers"`
-	}{h.title, h.config, h.watchers})
-	return snap, ch, func() { h.drop(ch) }
+	return h.snapshot(), ch, func() { h.drop(ch) }
 }
 
 func (h *hub) drop(ch chan []byte) {

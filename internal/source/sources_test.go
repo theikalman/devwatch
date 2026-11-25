@@ -4,10 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -86,6 +88,36 @@ func TestPostgres(t *testing.T) {
 	}
 	if _, err := fetch(t, config.Watcher{SQL: "CREATE TABLE devwatch_should_not_exist (i int)", DSN: dsn}); err == nil || !strings.Contains(err.Error(), "read-only") {
 		t.Fatalf("a write was allowed: %v", err)
+	}
+}
+
+func TestProcessPreset(t *testing.T) {
+	tag := fmt.Sprintf("devwatch-proc-test-%d", os.Getpid())
+	p := filepath.Join(t.TempDir(), "devwatch.yaml")
+	if err := os.WriteFile(p, []byte("watch:\n  - process: "+tag+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	count := func() string {
+		v, err := Fetch(context.Background(), cfg.Watch[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v.String()
+	}
+	if got := count(); got != "0" {
+		t.Fatalf("before: %s; the pipeline counts itself", got)
+	}
+	proc := exec.Command("sh", "-c", "sleep 30; :", tag) // tag becomes sh's $0, in its command line
+	if err := proc.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { proc.Process.Kill(); proc.Wait() }()
+	if got := count(); got != "1" {
+		t.Fatalf("with one matching process: %s", got)
 	}
 }
 

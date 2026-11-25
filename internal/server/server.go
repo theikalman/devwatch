@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"devwatch/internal/config"
@@ -24,22 +25,20 @@ type Server struct {
 	st       *store.Store
 	hub      *hub
 	runNow   func(key string) bool
-	ids      map[string]int64
-	keys     []string
 	loopback bool
+
+	mu   sync.RWMutex // guards ids and keys, which a reload replaces
+	ids  map[string]int64
+	keys []string
 }
 
 // New loads each watcher's recent state from st. runNow asks the engine for an extra check.
 // With loopbackOnly, requests must name a loopback host, which stops DNS-rebinding pages from reading the dashboard.
 func New(cfg *config.Config, configPath string, st *store.Store, runNow func(key string) bool, loopbackOnly bool) (*Server, error) {
-	s := &Server{st: st, runNow: runNow, ids: map[string]int64{}, loopback: loopbackOnly}
-	for _, w := range cfg.Watch {
-		id, err := st.Watcher(w.Key, w.Name, w.Source())
-		if err != nil {
-			return nil, err
-		}
-		s.ids[w.Key] = id
-		s.keys = append(s.keys, w.Key)
+	s := &Server{st: st, runNow: runNow, loopback: loopbackOnly}
+	var err error
+	if s.ids, s.keys, err = register(cfg, st); err != nil {
+		return nil, err
 	}
 	h, err := newHub(cfg, st, s.ids, filepath.Base(configPath))
 	if err != nil {
@@ -48,6 +47,41 @@ func New(cfg *config.Config, configPath string, st *store.Store, runNow func(key
 	s.hub = h
 	return s, nil
 }
+
+func register(cfg *config.Config, st *store.Store) (map[string]int64, []string, error) {
+	ids := map[string]int64{}
+	var keys []string
+	for _, w := range cfg.Watch {
+		id, err := st.Watcher(w.Key, w.Name, w.Source())
+		if err != nil {
+			return nil, nil, err
+		}
+		ids[w.Key] = id
+		keys = append(keys, w.Key)
+	}
+	return ids, keys, nil
+}
+
+// Reload switches to a new config's watchers and sends every browser a fresh snapshot.
+// Call it while no engine is reporting, between stopping the old engine and starting the new one.
+func (s *Server) Reload(cfg *config.Config) error {
+	ids, keys, err := register(cfg, s.st)
+	if err != nil {
+		return err
+	}
+	ws, err := loadWatchers(cfg, s.st, ids)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.ids, s.keys = ids, keys
+	s.mu.Unlock()
+	s.hub.reset(cfg.Title, ws)
+	return nil
+}
+
+// ConfigError shows why an edited config wasn't loaded, until a later edit loads.
+func (s *Server) ConfigError(msg string) { s.hub.configError(msg) }
 
 // Report sends a finished check to the browsers. Safe for concurrent use.
 func (s *Server) Report(key string, smp store.Sample) { s.hub.report(key, smp) }
@@ -107,7 +141,9 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) samples(w http.ResponseWriter, r *http.Request) {
+	s.mu.RLock()
 	id, ok := s.ids[r.PathValue("key")]
+	s.mu.RUnlock()
 	if !ok {
 		http.NotFound(w, r)
 		return
@@ -148,7 +184,10 @@ func (s *Server) changes(w http.ResponseWriter, r *http.Request) {
 	if v, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && v > 0 {
 		limit = min(v, 500)
 	}
-	cs, err := s.st.Changes(s.keys, before, limit)
+	s.mu.RLock()
+	keys := s.keys
+	s.mu.RUnlock()
+	cs, err := s.st.Changes(keys, before, limit)
 	if err != nil {
 		serverError(w, err)
 		return
