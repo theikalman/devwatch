@@ -61,9 +61,16 @@ func TestRunRecordsAndResumes(t *testing.T) {
 	run := func() []Check {
 		var mu sync.Mutex
 		var checks []Check
-		ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+		// Stop after 3 checks rather than after a fixed window: CI runners can be slow to start the shell.
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		err := New(cfg, st, func(c Check) { mu.Lock(); checks = append(checks, c); mu.Unlock() }).Run(ctx)
+		err := New(cfg, st, func(c Check) {
+			mu.Lock()
+			defer mu.Unlock()
+			if checks = append(checks, c); len(checks) == 3 {
+				cancel()
+			}
+		}).Run(ctx)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -72,7 +79,7 @@ func TestRunRecordsAndResumes(t *testing.T) {
 
 	first := run()
 	if len(first) < 2 {
-		t.Fatalf("%d checks in 300ms", len(first))
+		t.Fatalf("%d checks in 10s", len(first))
 	}
 	if s := first[0].Sample; !s.Changed || s.Summary != "5" || s.Health != value.OK {
 		t.Errorf("first check: %+v", s)
