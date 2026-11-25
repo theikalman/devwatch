@@ -2,7 +2,7 @@ name: release
 
 on:
   push:
-    tags: ["v[0-9]+.[0-9]+.[0-9]+"] # versions only, so marker tags like v0-tui don't publish a release
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"] # versions only, so other tags never publish a release
 
 permissions:
   contents: write # create the GitHub release

@@ -365,12 +365,12 @@ Presets live inside `config` because expanding them is part of loading the confi
 
 | | Scope | Done when |
 |---|---|---|
-| **M0 Fresh start** | Tag the current `main` as `v0-tui`, then on a `v2` branch delete the old code (keep `LICENSE`, `install.sh`, the release workflow), create the new layout, `go mod tidy` | `go build` passes, `devwatch --help` works. **Done** |
+| **M0 Fresh start** | On a `v2` branch, delete the old code (keep `LICENSE`, `install.sh`, the release workflow), create the new layout, `go mod tidy` | `go build` passes, `devwatch --help` works. **Done** |
 | **M1 Core, no UI** | Long-form config, `cmd` + `port` sources, kinds `number`/`text`/`json`/`table`/`probe`, thresholds, SQLite store, engine, `devwatch check`; plain `devwatch` prints each change until M2 | `devwatch check -c examples/demo.yaml` prints typed values; tests pass. **Done** |
 | **M2 Realtime UI** | Server, SSE, `tokens.css` and vendored fonts, cards for M1's kinds with every state, changes feed, drawer with history, run-now, filter, banners, tab title | Demo matches the Claude Design artboards in light and dark and works at phone width; changing a demo value updates the card and the feed within one interval. **Done**, except the config-error banner, which needs M4's hot reload |
 | **M3 Real sources** | `sql` (Postgres, SQLite), `http`, `docker` (Docker/Colima/Podman), kinds `row` and `containers` | Against a local compose stack (Postgres + an API), every source shows values; stopping a container flips its card and logs a change. **Done** (Podman 6.1, Postgres 15, MockServer) |
 | **M4 Easy config** | Shorthand, preset catalog, `${vars}`/env, positioned errors, `devwatch presets`, `devwatch init`, hot reload | A config of only preset one-liners works; editing the YAML updates the dashboard without a restart; a typo shows a banner with `file:line`. **Done**; on each edit every watcher restarts (each resumes from the store), and `docker.running` was left out: `docker: {label: …}` shows the running count already |
-| **M5 Ship** | README rewrite, check binary size and the `CGO_ENABLED=0` build, tag `v1.0.0` | `install.sh` installs a working v1. README, size (15 MB binary, 5.8 MB tarball) and the `CGO_ENABLED=0` darwin/arm64 build are **done**; the tag is pushed by hand |
+| **M5 Ship** | README rewrite, check binary size and the `CGO_ENABLED=0` build, tag `v1.0.0` | `install.sh` installs a working v1. **Done**: v1.0.0 released (15 MB binary, 5.8 MB tarball); `v2` merged into `main`, and the TUI releases and tags removed |
 
 ## Later (not v1)
 
@@ -378,15 +378,15 @@ Log tailing (`docker logs -f`, `tail -f`; the old tool's `stream` type) · deskt
 MySQL, Redis, Kafka, Kubernetes presets · user-defined presets in YAML · thresholds on one field of a `row`/`json` ·
 pausing a watcher · exporting history · an `ignore:` regex for noisy output.
 
-## Decisions to confirm
+## Decisions
 
-1. **Frontend stack:** no-build Preact + htm (recommended: nothing extra to install, one binary) vs Vite + React + TypeScript
-   (nicer for a large UI, but needs Node in development and CI).
-2. **Log tailing:** later (recommended) vs in v1. The old tool had it, but it is a log viewer, not a state watcher.
-3. **Databases:** Postgres + SQLite in v1 (recommended; SQLite comes free with the storage driver). Add MySQL now?
-4. **Container runtime** you use day to day (Docker Desktop, Colima or Podman): it gets tested first.
-5. **History:** keep 24 h in `.devwatch/data.db` beside the config (recommended).
-6. **Old TUI:** tag it `v0-tui` and delete it (recommended).
+1. **Frontend stack:** no-build Preact + htm, so there is nothing extra to install and it ships in the one binary
+   (not Vite + React + TypeScript, which would need Node in development and CI).
+2. **Log tailing:** later. The old tool had it, but it is a log viewer, not a state watcher.
+3. **Databases:** Postgres and SQLite in v1 (SQLite comes free with the storage driver); MySQL later.
+4. **Container runtime:** tested on Podman; Docker Desktop and Colima use the same API through the socket lookup.
+5. **History:** 24 h in `.devwatch/data.db` beside the config.
+6. **Old TUI:** deleted. It is still in `main`'s history at `b750395`, but has no tag or release.
 
 ## Risks and trade-offs
 
