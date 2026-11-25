@@ -151,7 +151,6 @@ knows presets exist. Each has a doc line and an example that `devwatch presets` 
 | `postgres.locks` | dsn | — | blocked queries and who blocks them; warn when any | table |
 | `docker.container` | name | `socket` | state, health, restarts, uptime | containers |
 | `docker.compose` | project | `socket` | every service of a compose project; crit if any is not running or unhealthy | containers |
-| `docker.running` | — | `filter`, `socket` | count of running containers | number |
 | `http.health` | url | `status` (2xx) | up/down, code, latency | probe |
 | `http.json` | url | `path`, `headers` | one value from a JSON response | number/text |
 | `process` | pattern | — | processes whose command line contains the pattern (`ps` + `awk`; `pgrep` sees nothing under some sandboxed launchers); crit when 0 | number |
@@ -212,7 +211,7 @@ CREATE INDEX sample_changes ON sample(at) WHERE changed = 1;
 - **Hub:** latest state per watcher in memory behind a mutex. Each browser gets a buffered channel. If the channel is full, that browser is disconnected;
   `EventSource` reconnects and gets a fresh snapshot. A slow browser never slows the checks.
 - **Hot reload:** check the config's mtime every second. If the new config is invalid, keep running the old one and show the error in the UI.
-  If it is valid, compare watchers by key: stop the removed ones, start the new ones, restart the ones whose settings changed, then push a new snapshot.
+  If it is valid, restart every watcher (each resumes from the store), then push a new snapshot.
 - **Shutdown:** SIGINT/SIGTERM → stop the HTTP server → cancel the engine → wait for child processes → close the DB.
 
 ## HTTP API
@@ -371,7 +370,7 @@ Presets live inside `config` because expanding them is part of loading the confi
 | **M2 Realtime UI** | Server, SSE, `tokens.css` and vendored fonts, cards for M1's kinds with every state, changes feed, drawer with history, run-now, filter, banners, tab title | Demo matches the Claude Design artboards in light and dark and works at phone width; changing a demo value updates the card and the feed within one interval. **Done**, except the config-error banner, which needs M4's hot reload |
 | **M3 Real sources** | `sql` (Postgres, SQLite), `http`, `docker` (Docker/Colima/Podman), kinds `row` and `containers` | Against a local compose stack (Postgres + an API), every source shows values; stopping a container flips its card and logs a change. **Done** (Podman 6.1, Postgres 15, MockServer) |
 | **M4 Easy config** | Shorthand, preset catalog, `${vars}`/env, positioned errors, `devwatch presets`, `devwatch init`, hot reload | A config of only preset one-liners works; editing the YAML updates the dashboard without a restart; a typo shows a banner with `file:line`. **Done**; on each edit every watcher restarts (each resumes from the store), and `docker.running` was left out: `docker: {label: …}` shows the running count already |
-| **M5 Ship** | README rewrite, check binary size and the `CGO_ENABLED=0` build, tag `v1.0.0` | `install.sh` installs a working v1 |
+| **M5 Ship** | README rewrite, check binary size and the `CGO_ENABLED=0` build, tag `v1.0.0` | `install.sh` installs a working v1. README, size (15 MB binary, 5.8 MB tarball) and the `CGO_ENABLED=0` darwin/arm64 build are **done**; the tag is pushed by hand |
 
 ## Later (not v1)
 

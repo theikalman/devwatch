@@ -1,65 +1,123 @@
 # devwatch
 
-Multi-pane terminal dashboard for local development. Watch Postgres query results
-or any shell command (e.g. `pgrep -fl my-api`, `aws --endpoint-url http://localhost:4566 s3 ls`) — all on one screen, driven by a YAML file.
+A live dashboard for the local state you check while debugging: SQL query results, Docker containers, HTTP
+endpoints and command output, on one page in your browser. Each result is shown by its kind (a number with a
+sparkline, a record with changed fields highlighted, a container list, an up/down probe), every change is kept
+in a local SQLite history, and the config is one YAML file that reloads while devwatch runs.
 
-Install (macOS Apple Silicon):
+## Install
+
+macOS Apple Silicon:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/theikalman/devwatch/main/install.sh | sh
 ```
 
-It installs to `~/.local/bin` (override with `BIN_DIR=...`; pin a release with `VERSION=v0.1.0`).
-Then `devwatch -c devwatch.yaml`, or from source:
+It installs to `~/.local/bin` (override with `BIN_DIR=...`; pin a release with `VERSION=v1.0.0`).
+Or from source, with Go 1.27+: clone the repo and run `go build -o ~/.local/bin/devwatch .`.
+
+## Start
 
 ```sh
-cp devwatch.example.yaml devwatch.yaml
-go run . -c devwatch.yaml   # q to quit
+devwatch init      # writes a commented devwatch.yaml
+devwatch --open    # serves http://127.0.0.1:7777 and opens it
+```
+
+To see every kind of card without Docker or Postgres: `go run . -c examples/demo.yaml`.
+
+```
+devwatch [-c FILE] [--addr ADDR] [--open]   run every watcher and serve the live dashboard
+devwatch check [-c FILE]                    run every watcher once and print the results; exit 1 on error or crit
+devwatch presets                            list the presets and their settings
+devwatch init [-c FILE]                     write a starter config (never over an existing file)
 ```
 
 ## Config
 
-Top level: `columns` (default 2), `log_dir` (optional) and `watchers`. Every watcher takes `name`, `type`,
-`interval` (default 5s) and `timeout` (default 5s).
+```yaml
+title: checkout-service
+every: 5s            # default check interval; per watcher: every:
+timeout: 5s
+keep: 24h            # history retention
 
-| type      | fields                                  | unhealthy when                |
-|-----------|-----------------------------------------|-------------------------------|
-| `command` | `command` (run with `sh -c`)            | non-zero exit                 |
-| `sql`     | `dsn`, `query` (Postgres)               | connect/query error           |
-| `stream`  | `command` (long-running, `sh -c`)       | command exits (non-zero = red) |
+vars:
+  pg: postgres://postgres:postgres@localhost:5432/app?sslmode=disable
 
-## Layout
+watch:
+  # presets: one line each
+  - docker.compose: checkout
+  - http.health: http://localhost:8080/healthz
+  - postgres.count: {dsn: "${pg}", table: orders, where: "status = 'pending'"}
+  - postgres.row: {dsn: "${pg}", table: orders, where: "id = 42"}
+    name: "order #42"
 
-- `main.go` — Bubble Tea model and grid rendering
-- `internal/config` — YAML loading and validation
-- `internal/watcher` — one `Check` per watcher type; add a type by adding a case
+  # or a source directly
+  - name: failed jobs
+    sql: SELECT count(*) FROM jobs WHERE state = 'failed'
+    dsn: ${pg}
+    warn: "> 0"
+    crit: "> 10"
+    group: queue
 
-## Scrolling
+  - name: api build
+    http: http://localhost:8080/version
+    value: build.sha
+```
 
-Each pane is a viewport: when its output is taller than the pane, scroll it (the header shows `↕ first-last/total`).
-The mouse wheel scrolls the pane under the cursor; `tab` / `shift+tab` pick the focused pane (thick border), and
-`↑`/`↓` (or `k`/`j`), `pgup`/`pgdn`, `home`/`end` scroll it. Polled panes start at the top (current output, then the
-change history, newest first); `stream` panes stay on the newest line until you scroll up, and then hold their place as new lines arrive.
-Mouse capture means selecting text needs a modifier (hold `option` in iTerm2/Terminal.app, `shift` elsewhere).
+Each entry has one source (`cmd`, `sql`, `http`, `docker`, `port`) or one preset. Any entry also takes `name`,
+`group`, `every`, `timeout`, `unit`, `as`, `value`, `match`, `warn`, `crit` and `expect`; next to a preset they
+override its own settings.
 
-## Streaming
+| Source | Example | Result |
+|---|---|---|
+| `cmd` | `cmd: redis-cli llen jobs` (runs in `sh -c`; `env:`, `dir:`) | number, text or JSON, inferred from the output; `as: table` splits columns |
+| `sql` | `sql: SELECT ...` + `dsn:` (Postgres URL, or `sqlite:path`) | one value → number/text, one row → record, more → table. Read-only |
+| `http` | `http: URL` (`method:`, `headers:`, `body:`, `status:`) | up/down probe, or with `value:` one field of the JSON body |
+| `docker` | `docker: {container: NAME}`, `{compose: PROJECT}` or `{label: k=v}` | container list: state, health, restarts, uptime |
+| `port` | `port: localhost:5432` | up/down probe of a TCP connect |
 
-`stream` runs the command once and keeps it running, e.g. `podman logs -f my-container`.
-stdout+stderr are appended to the pane (last 1000 lines kept, newest at the bottom), with no polling and no diffing.
-By default it is not restarted if it exits; set `restart: 3s` to run it again that long after it exits
-(clean exit or not), with a `── restarted HH:MM:SS ──` marker line between runs. On quit, its whole process group is stopped.
+- **Extract:** `value: data.items.0.status` picks a field from JSON or a record; `match: 'Active: (\w+)'` takes the first regex capture.
+- **Health:** `warn:` and `crit:` are one comparison: `"> 10"`, `"<= 0"`, `"== paid"`, `"!= 0"`. `expect:` is crit when it does not hold.
+  A failing check (timeout, non-zero exit, SQL error) is `error` and the card keeps its last good value, marked stale.
+  A probe that is down, and a container that is not running or unhealthy, is `crit`.
+- **Variables:** `${name}` comes from `vars:`, then the environment; an unknown name is an error. `$${name}` keeps it literal for the shell.
+- **Errors** name the position: `devwatch.yaml:14:5: watcher "orders": unknown field "intervall"`.
+  While devwatch runs, a broken edit keeps the old config and shows the error on the dashboard.
+- **YAML traps:** ` #` starts a comment, so quote `"order #42"`; quote values containing `: ` or write them as a `|` block.
 
-## Logging
+## Presets
 
-Set `log_dir` to append every check to `<log_dir>/<watcher name>.log`, one file per watcher.
-Each check is a section headed by `=== YYYY-MM-DD HH:MM:SS ===` (when the check started), followed by
-its output, with an `ERROR:` line first if it failed. `stream` watchers log one `[timestamp] line` per line instead. Logs grow with every poll and are never rotated.
+`devwatch presets` prints each with its settings. Postgres presets use `${DATABASE_URL}` unless you give `dsn`.
+
+| Preset | Example | Watches |
+|---|---|---|
+| `postgres.count` | `- postgres.count: users` | rows in a table (`where`) |
+| `postgres.row` | `- postgres.row: {table: orders, where: "id = 42"}` | one record, changed fields highlighted |
+| `postgres.rows` | `- postgres.rows: orders` | the latest rows (`where`, `order`, `limit`) |
+| `postgres.activity` | `- postgres.activity:` | queries running longer than `min` (1s) |
+| `postgres.locks` | `- postgres.locks:` | blocked queries and who blocks them |
+| `docker.container` | `- docker.container: checkout-api` | one container |
+| `docker.compose` | `- docker.compose: checkout` | every container of a compose project |
+| `http.health` | `- http.health: http://localhost:8080/health` | up/down, status, latency |
+| `http.json` | `- http.json: {url: http://localhost:8080/version, path: build.sha}` | one JSON field |
+| `process` | `- process: autofsd` | processes whose command line contains the text; crit at 0 |
+| `git.branch` | `- git.branch:` | current branch (`dir`) |
+| `s3.count` | `- s3.count: uploads` | objects in a bucket, LocalStack by default (`prefix`, `endpoint`) |
+
+Docker is found through `socket:`, `DOCKER_HOST` (unix), `/var/run/docker.sock`, Docker Desktop, Colima or Podman.
+
+## History and safety
+
+History lives in `.devwatch/data.db` next to the config (`db:` to move it), with its own `.gitignore`. Every check is
+one row; a value is stored only when it changes. The dashboard binds to `127.0.0.1` and accepts only loopback
+`Host` headers; `--addr` on another interface exposes your query results to the network. Passwords in URLs,
+auth headers and `env` values are hidden in the UI. SQL runs in read-only transactions.
 
 ## Release
 
-Pushing a tag like `v0.1.0` runs `.github/workflows/release.yml`: it vets and tests, builds
-`devwatch_darwin_arm64.tar.gz` (macOS Apple Silicon only) with a `.sha256` file, and attaches both to a GitHub release.
+Pushing a version tag runs `.github/workflows/release.yml`: it vets and tests, builds
+`devwatch_darwin_arm64.tar.gz` with a `.sha256`, and attaches both to a GitHub release.
 
 ```sh
-git tag v0.1.0 && git push origin v0.1.0
+git tag v1.0.0 && git push origin v1.0.0
 ```
