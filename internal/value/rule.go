@@ -50,7 +50,7 @@ func (r *Rule) Match(v Value) bool {
 	case Text:
 		s, text = v.Data.(string), true
 		n, numeric = parseNum(s)
-	case Number, Table, Probe:
+	case Number, Table, Probe, Containers:
 		if v.Num != nil {
 			n, numeric = *v.Num, true
 		}
@@ -83,10 +83,26 @@ func (r *Rule) Match(v Value) bool {
 }
 
 // Health decides a value's health and, when it isn't OK, why: a down probe or an unmet expect is crit,
-// then crit, then warn. Any rule may be nil.
+// then crit, then warn. Any rule may be nil. Containers are crit when any isn't running or is unhealthy,
+// unless expect is set: then it alone judges the running count (for stacks with one-off jobs).
 func Health(v Value, warn, crit, expect *Rule) (health, why string) {
 	if p, ok := v.Data.(ProbeData); ok && !p.Up {
 		return Crit, "it is down"
+	}
+	if cs, ok := v.Data.([]ContainerData); ok && expect == nil {
+		if len(cs) == 0 {
+			return Crit, "no container matches"
+		}
+		for _, c := range cs {
+			switch {
+			case c.State == "exited":
+				return Crit, fmt.Sprintf("%s exited (%d)", c.Name, c.ExitCode)
+			case c.State != "running":
+				return Crit, c.Name + " is " + c.State
+			case c.Health == "unhealthy":
+				return Crit, c.Name + " is unhealthy"
+			}
+		}
 	}
 	if expect != nil && !expect.Match(v) {
 		return Crit, "expect " + expect.String() + " is not met"

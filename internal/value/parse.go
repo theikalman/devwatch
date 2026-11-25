@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-const maxRows = 200 // rows kept per table value
+const MaxRows = 200 // rows kept per table value
 
 // Parse turns command or HTTP output into a value. Each step is optional and runs in order: path picks a field
 // from JSON output ("data.items.0.status"), match keeps a regex's first group (or the whole match), then as
@@ -120,7 +120,7 @@ func parseTable(s string) TableData {
 			t.Cols = split(line)
 			continue
 		}
-		if len(t.Rows) == maxRows {
+		if len(t.Rows) == MaxRows {
 			t.Truncated = true
 			break
 		}

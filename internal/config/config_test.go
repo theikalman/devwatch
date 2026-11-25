@@ -48,6 +48,43 @@ watch:
 	}
 }
 
+func TestLoadSources(t *testing.T) {
+	p := write(t, `watch:
+  - name: rows
+    sql: SELECT 1
+    dsn: sqlite:app.db
+  - name: health
+    http: http://localhost:8080/healthz
+    method: head
+  - name: stack
+    docker: {compose: checkout}
+    socket: ~/podman.sock
+`)
+	c, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	home, _ := os.UserHomeDir()
+	if w := c.Watch[0]; w.Source() != "sql" || w.DSN != "sqlite:"+filepath.Join(filepath.Dir(p), "app.db") {
+		t.Errorf("sql watcher: %s %s", w.Source(), w.DSN)
+	}
+	if w := c.Watch[1]; w.Source() != "http" || w.Method != "HEAD" || w.Status != "2xx" {
+		t.Errorf("http watcher: %s %s %s", w.Source(), w.Method, w.Status)
+	}
+	if w := c.Watch[2]; w.Source() != "docker" || w.Docker.Compose != "checkout" || w.Socket != filepath.Join(home, "podman.sock") {
+		t.Errorf("docker watcher: %+v", w)
+	}
+	for _, tt := range []struct {
+		want string
+		code int
+		ok   bool
+	}{{"2xx", 204, true}, {"2xx", 301, false}, {"200", 200, true}, {"200", 201, false}, {"404", 404, true}} {
+		if StatusOK(tt.want, tt.code) != tt.ok {
+			t.Errorf("StatusOK(%s, %d) != %v", tt.want, tt.code, tt.ok)
+		}
+	}
+}
+
 func TestLoadErrors(t *testing.T) {
 	tests := []struct{ yaml, want string }{
 		{"", "file is empty"},
@@ -63,6 +100,12 @@ func TestLoadErrors(t *testing.T) {
 		{"watch:\n  - name: a\n    cmd: x\n    as: bool", `as: "bool"`},
 		{"watch:\n  - name: a\n    cmd: x\n    match: '('", "match:"},
 		{"watch:\n  - name: a\n    port: nohost", "port:"},
+		{"watch:\n  - name: a\n    sql: select 1", "needs a dsn"},
+		{"watch:\n  - name: a\n    http: localhost:8080", "not an http"},
+		{"watch:\n  - name: a\n    http: http://x\n    status: ok", "status:"},
+		{"watch:\n  - name: a\n    docker: {}", "exactly one of"},
+		{"watch:\n  - name: a\n    docker: {container: x, compose: y}", "exactly one of"},
+		{"watch:\n  - name: a\n    docker: {service: x}", "service"},
 	}
 	for _, tt := range tests {
 		_, err := Load(write(t, tt.yaml))

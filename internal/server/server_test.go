@@ -216,6 +216,29 @@ func getJSON(t *testing.T, url string, v any) {
 	}
 }
 
+func TestSpecAndTarget(t *testing.T) {
+	cfg := &config.Config{Dir: "/x"}
+	w := &config.Watcher{Name: "api", HTTP: "https://bob:pw@api.local/v1?token=abc", Method: "POST", Status: "2xx",
+		Headers: map[string]string{"Authorization": "Bearer abc", "Accept": "application/json"}, Every: time.Second, Timeout: time.Second}
+	s := spec(cfg, w)
+	if strings.Contains(s, "pw@") || strings.Contains(s, "Bearer") || strings.Contains(s, "token=abc") || !strings.Contains(s, "Accept: application/json") || !strings.Contains(s, "method: POST") {
+		t.Errorf("http spec:\n%s", s)
+	}
+	if got := target(w); got != "POST https://bob:••••@api.local/v1?token=••••" {
+		t.Errorf("http target = %q", got)
+	}
+	w = &config.Watcher{Name: "q", SQL: "SELECT *\n  FROM orders\n  WHERE id = 42", DSN: "host=db user=app password=s3cret", Every: time.Second, Timeout: time.Second}
+	if s := spec(cfg, w); strings.Contains(s, "s3cret") || !strings.Contains(s, "sql: |\n  SELECT *\n    FROM orders") {
+		t.Errorf("sql spec:\n%s", s)
+	}
+	if got := target(w); got != "SELECT * FROM orders WHERE id = 42" {
+		t.Errorf("sql target = %q", got)
+	}
+	if got := target(&config.Watcher{Docker: &config.Docker{Compose: "shop"}}); got != "compose shop" {
+		t.Errorf("docker target = %q", got)
+	}
+}
+
 func TestRedact(t *testing.T) {
 	for in, want := range map[string]string{
 		"AWS_SECRET_ACCESS_KEY=abc aws s3 ls":         "AWS_SECRET_ACCESS_KEY=•••• aws s3 ls",

@@ -38,9 +38,9 @@ with exactly one source. Everything after the source is shared.
 | Source | Config | What it does | Default kind |
 |---|---|---|---|
 | `cmd` | `cmd: <shell>` (+ `env`, `dir`) | `sh -c` in the config's directory, stdout+stderr, own process group killed on timeout, output capped at 64 KB | inferred from output |
-| `sql` | `sql: <query>` + `dsn` | Postgres (pgx) or SQLite (`sqlite:` DSN). One pooled `*sql.DB` per DSN, max 200 rows | 1×1 → number/text · 1 row → row · n rows → table |
-| `http` | `http: <url>` (+ `method`, `headers`, `body`, `expect`) | `net/http`, body capped at 256 KB | probe; with `value:` → the extracted value; `as: json` → json |
-| `docker` | `docker: {container \| compose \| label}` | Engine API over the unix socket with plain `net/http` (no SDK). Same API works for Docker Desktop, Colima and Podman | containers |
+| `sql` | `sql: <query>` + `dsn` | Postgres (pgx) or SQLite (`sqlite:` DSN). One pooled `*sql.DB` per DSN, max 200 rows. Read-only: SQLite opens in read-only mode, Postgres queries run in a read-only transaction | 1×1 → number/text · 1 row → row · n rows → table |
+| `http` | `http: <url>` (+ `method`, `headers`, `body`, `status`: `200` or `2xx`, default `2xx`) | `net/http`, body capped at 256 KB | probe; with `value:` → the extracted value; `as: json` → json |
+| `docker` | `docker: {container \| compose \| label}` | Engine API over the unix socket with plain `net/http` (no SDK). Same API works for Docker Desktop, Colima and Podman (tested: Podman 6.1 on macOS) | containers |
 | `port` | `port: host:port` | TCP dial | probe |
 
 ### Value kinds (these drive the UI)
@@ -70,7 +70,7 @@ Applied in this order, each step optional:
 | Health | When |
 |---|---|
 | `error` | The source itself failed: timeout, non-zero exit, SQL error, unexpected HTTP status. The card keeps the last good value, dimmed and marked stale |
-| `crit` | `crit:` matched, or `expect:` not met. For probes, "down" is the answer, not an error, so connection refused → `up: false` → `crit` |
+| `crit` | `crit:` matched, or `expect:` not met. For probes, "down" is the answer, not an error, so connection refused → `up: false` → `crit`. Containers: crit when any isn't running (a clean `docker stop` exits 0, so exit code 0 counts too) or is unhealthy, or none match; with `expect:` set, it alone judges the running count, for stacks with one-off jobs |
 | `warn` | `warn:` matched |
 | `ok` | otherwise |
 
@@ -152,7 +152,7 @@ knows presets exist. Each has a doc line and an example that `devwatch presets` 
 | `docker.container` | name | `socket` | state, health, restarts, uptime | containers |
 | `docker.compose` | project | `socket` | every service of a compose project; crit if any is not running or unhealthy | containers |
 | `docker.running` | — | `filter`, `socket` | count of running containers | number |
-| `http.health` | url | `expect` (2xx) | up/down, code, latency | probe |
+| `http.health` | url | `status` (2xx) | up/down, code, latency | probe |
 | `http.json` | url | `path`, `headers` | one value from a JSON response | number/text |
 | `process` | pattern | — | `pgrep -f … \| wc -l` (macOS `pgrep` has no `-c`); crit when 0 | number |
 | `git.branch` | — | `dir` | current branch | text |
@@ -182,6 +182,7 @@ CREATE TABLE sample (
   ms      INTEGER NOT NULL,      -- check duration
   num     REAL,                  -- charted number (see kinds table)
   changed INTEGER NOT NULL,      -- value or health differs from the previous sample
+  kind    TEXT,                  -- the value's kind, set with value
   value   TEXT,                  -- canonical JSON, only when changed = 1
   summary TEXT,                  -- "pending → paid", only when changed = 1
   error   TEXT,
@@ -196,7 +197,7 @@ CREATE INDEX sample_changes ON sample(at) WHERE changed = 1;
 - **Retention:** every 5 min, delete rows older than `keep`, except each watcher's newest changed row (later rows rely on it for the value).
 - **Startup:** load each watcher's last changed row, so the dashboard shows the last known state at once (marked stale until the first check)
   and change detection continues across restarts.
-- **Identity:** `key` is the slugged name. Renaming starts a new history. If a watcher's kind changes, its history is dropped (the stored shapes no longer match).
+- **Identity:** `key` is the slugged name. Renaming starts a new history. Each stored value carries its kind, so a watcher whose kind changes (a query returning one row, then several) keeps its history.
   Watchers removed from the config keep their history until retention removes it, and are hidden from the UI.
 - **Summaries** are computed in Go when a change is stored, per kind: `17 → 20 (+3)`, `pending → paid`,
   `status: pending → paid`, `+2 rows, −1 row`, `DOWN: connection refused`, `checkout-api: running → exited, restarts 0 → 1`, `ok → warn`.
@@ -368,7 +369,7 @@ Presets live inside `config` because expanding them is part of loading the confi
 | **M0 Fresh start** | Tag the current `main` as `v0-tui`, then on a `v2` branch delete the old code (keep `LICENSE`, `install.sh`, the release workflow), create the new layout, `go mod tidy` | `go build` passes, `devwatch --help` works. **Done** |
 | **M1 Core, no UI** | Long-form config, `cmd` + `port` sources, kinds `number`/`text`/`json`/`table`/`probe`, thresholds, SQLite store, engine, `devwatch check`; plain `devwatch` prints each change until M2 | `devwatch check -c examples/demo.yaml` prints typed values; tests pass. **Done** |
 | **M2 Realtime UI** | Server, SSE, `tokens.css` and vendored fonts, cards for M1's kinds with every state, changes feed, drawer with history, run-now, filter, banners, tab title | Demo matches the Claude Design artboards in light and dark and works at phone width; changing a demo value updates the card and the feed within one interval. **Done**, except the config-error banner, which needs M4's hot reload |
-| **M3 Real sources** | `sql` (Postgres, SQLite), `http`, `docker` (Docker/Colima/Podman), kinds `row` and `containers` | Against a local compose stack (Postgres + an API), every source shows values; stopping a container flips its card and logs a change |
+| **M3 Real sources** | `sql` (Postgres, SQLite), `http`, `docker` (Docker/Colima/Podman), kinds `row` and `containers` | Against a local compose stack (Postgres + an API), every source shows values; stopping a container flips its card and logs a change. **Done** (Podman 6.1, Postgres 15, MockServer) |
 | **M4 Easy config** | Shorthand, preset catalog, `${vars}`/env, positioned errors, `devwatch presets`, `devwatch init`, hot reload | A config of only preset one-liners works; editing the YAML updates the dashboard without a restart; a typo shows a banner with `file:line` |
 | **M5 Ship** | README rewrite, check binary size and the `CGO_ENABLED=0` build, tag `v1.0.0` | `install.sh` installs a working v1 |
 

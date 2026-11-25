@@ -57,6 +57,10 @@ export function short(kind, v) {
       return plural(v.rows.length, 'row')
     case 'probe':
       return v.up ? (v.code ? `UP ${v.code}` : 'UP') : 'DOWN'
+    case 'row':
+      return plural(v.cols.length, 'field')
+    case 'containers':
+      return `${v.filter(c => c.state === 'running').length}/${v.length} running`
   }
   return cut(JSON.stringify(v), 80)
 }

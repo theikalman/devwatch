@@ -38,8 +38,88 @@ func Summary(prev *Value, cur Value) string {
 		return countDiff(rowsText(a), rowsText(b), "row")
 	case Probe:
 		return probeState(prev.Data.(ProbeData)) + " → " + probeState(cur.Data.(ProbeData))
+	case Row:
+		a, b := prev.Data.(RowData), cur.Data.(RowData)
+		if !slices.Equal(a.Cols, b.Cols) {
+			return "columns changed"
+		}
+		var out []string
+		for i, c := range b.Cols {
+			if cell(a.Vals[i]) != cell(b.Vals[i]) || (a.Vals[i] == nil) != (b.Vals[i] == nil) {
+				out = append(out, fmt.Sprintf("%s: %s → %s", c, shortCell(a.Vals[i]), shortCell(b.Vals[i])))
+			}
+		}
+		return firstThree(out)
+	case Containers:
+		return containerChanges(prev.Data.([]ContainerData), cur.Data.([]ContainerData))
 	}
 	return jsonChanges(prev.Data, cur.Data)
+}
+
+func shortCell(s *string) string {
+	if r := []rune(cell(s)); len(r) > 40 {
+		return string(r[:39]) + "…"
+	}
+	return cell(s)
+}
+
+// firstThree joins up to three changes: "a; b; c (+2 more)".
+func firstThree(out []string) string {
+	if len(out) == 0 {
+		return "changed"
+	}
+	s := strings.Join(out[:min(3, len(out))], "; ")
+	if len(out) > 3 {
+		s += fmt.Sprintf(" (+%d more)", len(out)-3)
+	}
+	return s
+}
+
+func containerState(c ContainerData) string {
+	if c.State == "exited" {
+		return fmt.Sprintf("exited (%d)", c.ExitCode)
+	}
+	return c.State
+}
+
+// containerChanges names what changed per container: "redis: running → exited (137); api: restarts 0 → 1".
+func containerChanges(a, b []ContainerData) string {
+	old := map[string]ContainerData{}
+	for _, c := range a {
+		old[c.Name] = c
+	}
+	var out []string
+	for _, c := range b {
+		p, ok := old[c.Name]
+		delete(old, c.Name)
+		switch {
+		case !ok:
+			out = append(out, fmt.Sprintf("+%s (%s)", c.Name, containerState(c)))
+		case containerState(p) != containerState(c):
+			out = append(out, fmt.Sprintf("%s: %s → %s", c.Name, containerState(p), containerState(c)))
+		case p.Restarts != c.Restarts:
+			out = append(out, fmt.Sprintf("%s: restarts %d → %d", c.Name, p.Restarts, c.Restarts))
+		case p.Health != c.Health:
+			out = append(out, fmt.Sprintf("%s: %s → %s", c.Name, or(p.Health, "no check"), or(c.Health, "no check")))
+		case p.Image != c.Image:
+			out = append(out, fmt.Sprintf("%s: image %s → %s", c.Name, p.Image, c.Image))
+		case p.Started != c.Started:
+			out = append(out, c.Name+": restarted")
+		}
+	}
+	for _, c := range a {
+		if _, gone := old[c.Name]; gone {
+			out = append(out, "−"+c.Name)
+		}
+	}
+	return firstThree(out)
+}
+
+func or(s, def string) string {
+	if s == "" {
+		return def
+	}
+	return s
 }
 
 // signed formats a delta with its sign and a real minus, rounded to hide float noise like 0.30000000000000004.
@@ -90,14 +170,7 @@ func countDiff(a, b, unit string) string {
 func jsonChanges(a, b any) string {
 	var out []string
 	diffJSON(a, b, "", &out)
-	if len(out) == 0 {
-		return "changed"
-	}
-	s := strings.Join(out[:min(3, len(out))], "; ")
-	if len(out) > 3 {
-		s += fmt.Sprintf(" (+%d more)", len(out)-3)
-	}
-	return s
+	return firstThree(out)
 }
 
 func diffJSON(a, b any, path string, out *[]string) {

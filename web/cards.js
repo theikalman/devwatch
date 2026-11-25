@@ -3,7 +3,8 @@ import { useState } from './vendor/hooks.module.js'
 import { html, Icon, Pill } from './ui.js'
 import { ago, clock, dur, num, plural, rulesText, short, shownHealth, signed, threshold } from './format.js'
 
-const WIDE = new Set(['table', 'json'])
+// Wide kinds span two grid columns; a container list does too, unless it holds just one container.
+const wide = w => ['table', 'json', 'row'].includes(w.kind) || (w.kind === 'containers' && w.value.length !== 1)
 const LOADED = Date.now() // only values that change after the page loaded flash
 
 const flash = w => (w.value_at > LOADED ? 'flash' : '')
@@ -14,7 +15,7 @@ export function Card({ w, now, running, onOpen, onRun }) {
   // The whole card opens the drawer for the mouse; the name is the button for the keyboard.
   const click = () => window.getSelection().toString() || onOpen()
   const stop = fn => e => { e.stopPropagation(); fn() }
-  return html`<article class="card ${health || 'loading'} ${WIDE.has(w.kind) ? 'wide' : ''}" onClick=${click}>
+  return html`<article class="card ${health || 'loading'} ${wide(w) ? 'wide' : ''}" onClick=${click}>
     <header class="card-head">
       <span class="card-icon"><${Icon} name=${w.source} /></span>
       <div class="card-title">
@@ -164,7 +165,67 @@ function ErrorBody({ w }) {
       <div class="sub">last good value${good ? ` · ${clock(good.at)}` : ''}</div>`}`
 }
 
-const BODIES = { number: NumberBody, text: TextBody, table: TableBody, json: JsonBody, probe: ProbeBody }
+const Cell = ({ v }) => (v === null ? html`<span class="muted">NULL</span>` : v)
+
+function RowBody({ w }) {
+  const r = w.value
+  const prev = w.prev && Array.isArray(w.prev.cols) && w.prev.cols.join('\t') === r.cols.join('\t') ? w.prev : null
+  const changed = prev ? r.cols.filter((_, i) => prev.vals[i] !== r.vals[i]).length : 0
+  return html`
+    <dl class="fields" onClick=${e => e.stopPropagation()}>
+      ${r.cols.map((c, i) => {
+        const was = prev && prev.vals[i] !== r.vals[i]
+        return html`<div class="field ${was ? 'changed' : ''}">
+          <dt class="mono" title=${c}>${c}</dt>
+          <dd class="mono"><${Cell} v=${r.vals[i]} />${was && html`<span class="old"><${Cell} v=${prev.vals[i]} /></span>`}</dd>
+        </div>`
+      })}
+    </dl>
+    ${changed > 0 && html`<div class="sub accent">${plural(changed, 'field')} changed at ${clock(w.value_at)}</div>`}`
+}
+
+const down = c => c.state !== 'running' || c.health === 'unhealthy'
+const stateText = c => (c.state === 'exited' ? `exited (${c.exit_code || 0})` : c.state)
+const dot = c => (down(c) ? 'crit' : c.health === 'starting' ? 'warn' : 'ok')
+function since(c, now) {
+  if (c.state === 'running') return c.started ? dur(now - c.started) : '—'
+  return c.finished ? `stopped ${dur(now - c.finished)} ago` : '—'
+}
+
+function ContainersBody({ w, now }) {
+  const cs = w.value
+  if (!cs.length) return html`<div class="mono value-m tone-crit">none</div><div class="sub">no container matches ${w.target}</div>`
+  if (cs.length === 1) {
+    const c = cs[0]
+    const before = Array.isArray(w.prev) ? w.prev.find(p => p.name === c.name) : null
+    return html`
+      <div class="ctr-state"><span class="dot ${dot(c)}"></span>${stateText(c)}${c.health && html`<span class="muted"> · ${c.health}</span>`}</div>
+      <dl class="kv">
+        <dt>${c.state === 'running' ? 'Uptime' : 'Stopped'}</dt><dd class="mono">${since(c, now).replace(/^stopped /, '')}</dd>
+        <dt>Restarts</dt><dd class="mono">${c.restarts}${before && c.restarts > before.restarts && html`<span class="chip-new">+${c.restarts - before.restarts}</span>`}</dd>
+        <dt>Image</dt><dd class="mono" title=${c.image}>${c.image}</dd>
+      </dl>
+      <${Rules} w=${w} />`
+  }
+  const running = cs.filter(c => c.state === 'running').length
+  return html`
+    <div class="value-line"><span class="mono value-m">${running}<span class="muted">/${cs.length}</span></span><span class="unit">running</span></div>
+    <div class="tablewrap" onClick=${e => e.stopPropagation()}>
+      <table class="t">
+        <thead><tr><th>Name</th><th>State</th><th>Health</th><th class="num">Uptime</th><th class="num">Restarts</th></tr></thead>
+        <tbody>${cs.map(c => html`<tr class=${down(c) ? 'bad' : ''}>
+          <td class="mono">${c.name}</td>
+          <td><span class="dot ${dot(c)}"></span>${stateText(c)}</td>
+          <td class="muted">${c.health || '—'}</td>
+          <td class="mono num">${since(c, now)}</td>
+          <td class="mono num">${c.restarts}</td>
+        </tr>`)}</tbody>
+      </table>
+    </div>
+    <${Rules} w=${w} />`
+}
+
+const BODIES = { number: NumberBody, text: TextBody, table: TableBody, json: JsonBody, probe: ProbeBody, row: RowBody, containers: ContainersBody }
 
 export function Sparkline({ values, line = null, health, width = 112, height = 44, label = 'Value' }) {
   const pts = values.map((v, i) => [i, v]).filter(([, v]) => v != null)

@@ -122,6 +122,26 @@ table.t tr.gone { color: var(--text-3); text-decoration: line-through; }
 .json .old { margin-left: 8px; color: var(--text-3); text-decoration: line-through; }
 .json .tog { width: 16px; padding: 0; border: 0; background: none; color: var(--text-3); }
 .flash { animation: flash 1.5s ease-out; }
+.fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 2px 24px; margin: 0; max-height: 320px; overflow: auto; font-size: 13px; cursor: text; }
+.field { display: flex; gap: 12px; min-width: 0; padding: 6px 8px; border-radius: 6px; }
+.field.changed { background: var(--accent-soft); }
+.field dt { flex: none; width: 104px; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.field dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.field .old { margin-left: 8px; text-decoration: line-through; }
+.sub.accent { color: var(--accent); }
+.dot { display: inline-block; width: 8px; height: 8px; margin-right: 6px; border-radius: 50%; background: var(--ok); }
+.dot.warn { background: var(--warn); }
+.dot.crit { background: var(--crit); }
+.ctr-state { display: flex; align-items: center; gap: 8px; font-size: 18px; font-weight: 600; }
+.ctr-state .dot { width: 10px; height: 10px; margin: 0; }
+.ctr-state .muted { font-size: 13px; font-weight: 500; }
+.kv { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px 16px; margin: 14px 0 0; font-size: 13px; }
+.kv dt { color: var(--text-3); }
+.kv dd { margin: 0; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chip-new { margin-left: 8px; padding: 1px 6px; border-radius: 4px; background: var(--accent-soft); color: var(--accent); font-size: 11px; }
+table.t tr.bad { background: var(--crit-soft); }
+table.t tr.bad td { color: var(--crit); }
+table.t .num { text-align: right; }
 
 /* Changes feed */
 .feed { position: sticky; top: 16px; flex: 1 1 300px; min-width: 0; max-height: calc(100vh - 32px); display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; }

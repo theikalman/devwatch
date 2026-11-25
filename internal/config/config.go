@@ -2,13 +2,16 @@
 package config
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"io"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -47,13 +50,32 @@ type Watcher struct {
 	Dir  string            `yaml:"dir"`  // cmd working directory; default: the config's directory
 	Port string            `yaml:"port"` // host:port, checked with a TCP dial
 
+	SQL string `yaml:"sql"` // a query, run read-only
+	DSN string `yaml:"dsn"` // postgres://… (or key=value), or sqlite:path
+
+	HTTP    string            `yaml:"http"` // URL
+	Method  string            `yaml:"method"`
+	Headers map[string]string `yaml:"headers"`
+	Body    string            `yaml:"body"`
+	Status  string            `yaml:"status"` // expected status: 200 or 2xx (default)
+
+	Docker *Docker `yaml:"docker"`
+	Socket string  `yaml:"socket"` // Docker or Podman API socket; found on its own when empty
+
 	// Set by Load.
 	Key                            string         `yaml:"-"` // slug of Name; history follows it
 	MatchRe                        *regexp.Regexp `yaml:"-"`
 	WarnRule, CritRule, ExpectRule *value.Rule    `yaml:"-"`
 }
 
-// Source names the watcher's source: "cmd" or "port".
+// Docker picks containers by exactly one of its fields.
+type Docker struct {
+	Container string `yaml:"container"` // one container, by name
+	Compose   string `yaml:"compose"`   // every container of a compose project
+	Label     string `yaml:"label"`     // every container with a label: "key" or "key=value"
+}
+
+// Source names the watcher's source: "cmd", "port", "sql", "http" or "docker".
 func (w *Watcher) Source() string {
 	if s := w.sources(); len(s) == 1 {
 		return s[0]
@@ -67,6 +89,15 @@ func (w *Watcher) sources() (s []string) {
 	}
 	if w.Port != "" {
 		s = append(s, "port")
+	}
+	if w.SQL != "" {
+		s = append(s, "sql")
+	}
+	if w.HTTP != "" {
+		s = append(s, "http")
+	}
+	if w.Docker != nil {
+		s = append(s, "docker")
 	}
 	return s
 }
@@ -134,7 +165,7 @@ func (w *Watcher) validate(c *Config) error {
 	w.Timeout = orDefault(w.Timeout, c.Timeout)
 	switch src := w.sources(); len(src) {
 	case 0:
-		return errors.New("needs a source: cmd or port")
+		return errors.New("needs a source: cmd, sql, http, docker or port")
 	case 1:
 	default:
 		return fmt.Errorf("has more than one source: %s", strings.Join(src, ", "))
@@ -169,8 +200,51 @@ func (w *Watcher) validate(c *Config) error {
 			return fmt.Errorf("port: %w", err)
 		}
 	}
+	if w.SQL != "" {
+		if w.DSN == "" {
+			return errors.New("sql needs a dsn: postgres://user:pass@host/db or sqlite:path")
+		}
+		if path, ok := strings.CutPrefix(w.DSN, "sqlite:"); ok {
+			w.DSN = "sqlite:" + c.abs(path)
+		}
+	}
+	if w.HTTP != "" {
+		if u, err := url.Parse(w.HTTP); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			return fmt.Errorf("http: %q is not an http:// or https:// URL", w.HTTP)
+		}
+		w.Method = strings.ToUpper(cmp.Or(w.Method, "GET"))
+		w.Status = cmp.Or(w.Status, "2xx")
+		if !statusPattern.MatchString(w.Status) {
+			return fmt.Errorf("status: %q is not a code like 200 or a class like 2xx", w.Status)
+		}
+	}
+	if d := w.Docker; d != nil {
+		if n := btoi(d.Container != "") + btoi(d.Compose != "") + btoi(d.Label != ""); n != 1 {
+			return errors.New("docker needs exactly one of container, compose or label")
+		}
+	}
+	if home, err := os.UserHomeDir(); err == nil && strings.HasPrefix(w.Socket, "~/") {
+		w.Socket = filepath.Join(home, w.Socket[2:])
+	}
 	w.Dir = c.abs(w.Dir)
 	return nil
+}
+
+var statusPattern = regexp.MustCompile(`^[1-5](xx|[0-9]{2})$`)
+
+// StatusOK reports whether code matches an expected status: "200" exactly, "2xx" by class.
+func StatusOK(want string, code int) bool {
+	if strings.HasSuffix(want, "xx") {
+		return code/100 == int(want[0]-'0')
+	}
+	return strconv.Itoa(code) == want
+}
+
+func btoi(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 // abs resolves p against the config's directory; empty means that directory.

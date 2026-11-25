@@ -18,8 +18,7 @@ type Change struct {
 	Summary    string
 }
 
-const sampleCols = `SELECT s.at, s.health, s.ms, s.num, s.changed, w.kind, s.value, s.summary, s.error
-	FROM sample s JOIN watcher w ON w.id = s.watcher_id`
+const sampleCols = `SELECT s.at, s.health, s.ms, s.num, s.changed, s.kind, s.value, s.summary, s.error FROM sample s`
 
 // Samples returns the watcher's samples from since on, oldest first: at most the newest limit of them.
 func (s *Store) Samples(id int64, since time.Time, limit int) ([]Sample, error) {
@@ -85,11 +84,10 @@ func (s *Store) query(q string, args ...any) ([]Sample, error) {
 	var out []Sample
 	for rows.Next() {
 		var (
-			smp                  Sample
-			at                   int64
-			num                  sql.NullFloat64
-			kind                 string
-			val, summary, errMsg sql.NullString
+			smp                        Sample
+			at                         int64
+			num                        sql.NullFloat64
+			kind, val, summary, errMsg sql.NullString
 		)
 		if err := rows.Scan(&at, &smp.Health, &smp.MS, &num, &smp.Changed, &kind, &val, &summary, &errMsg); err != nil {
 			return nil, err
@@ -99,7 +97,7 @@ func (s *Store) query(q string, args ...any) ([]Sample, error) {
 			smp.Num = &num.Float64
 		}
 		if val.Valid {
-			smp.Kind, smp.Value = value.Kind(kind), []byte(val.String)
+			smp.Kind, smp.Value = value.Kind(kind.String), []byte(val.String)
 		}
 		smp.Summary, smp.Error = summary.String, errMsg.String
 		out = append(out, smp)

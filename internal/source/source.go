@@ -23,6 +23,12 @@ func Fetch(ctx context.Context, w config.Watcher) (value.Value, error) {
 		return value.Parse(out, w.As, w.Value, w.MatchRe)
 	case "port":
 		return probePort(ctx, w), nil
+	case "sql":
+		return runSQL(ctx, w)
+	case "http":
+		return runHTTP(ctx, w)
+	case "docker":
+		return runDocker(ctx, w)
 	}
 	return value.Value{}, errors.New("no source")
 }

@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS watcher (
   id     INTEGER PRIMARY KEY,
   key    TEXT NOT NULL UNIQUE, -- slug of the name: history follows the name
   name   TEXT NOT NULL,
-  kind   TEXT NOT NULL,        -- kind of the newest value; '' before the first one
+  kind   TEXT NOT NULL,        -- unused since values carry their own kind; kept so older files accept inserts
   source TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS sample (
@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS sample (
   ms      INTEGER NOT NULL,    -- check duration
   num     REAL,
   changed INTEGER NOT NULL,    -- value, health or error differs from the previous sample
+  kind    TEXT,                -- the value's kind, set with value
   value   TEXT,                -- canonical JSON, only when the value changed
   summary TEXT,                -- only when changed
   error   TEXT,
@@ -79,7 +80,7 @@ func Open(path string) (*Store, error) {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1) // shortcut: one connection serializes all access; fine at a few writes per second
-	if _, err := db.Exec(schema); err != nil {
+	if err := migrate(db); err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -88,6 +89,21 @@ func Open(path string) (*Store, error) {
 		return nil, err
 	}
 	return &Store{db}, nil
+}
+
+// migrate creates the tables, and gives files from before per-value kinds a sample.kind column,
+// filled from the watcher's kind they used to share.
+func migrate(db *sql.DB) error {
+	if _, err := db.Exec(schema); err != nil {
+		return err
+	}
+	var has int
+	if err := db.QueryRow(`SELECT count(*) FROM pragma_table_info('sample') WHERE name = 'kind'`).Scan(&has); err != nil || has > 0 {
+		return err
+	}
+	_, err := db.Exec(`ALTER TABLE sample ADD COLUMN kind TEXT;
+		UPDATE sample SET kind = (SELECT kind FROM watcher WHERE id = sample.watcher_id) WHERE value IS NOT NULL`)
+	return err
 }
 
 func (s *Store) Close() error { return s.db.Close() }
@@ -113,43 +129,20 @@ func (s *Store) Last(id int64) (Last, error) {
 		return l, err
 	}
 	l.Found = true
-	err = s.db.QueryRow(`SELECT w.kind, s.value FROM sample s JOIN watcher w ON w.id = s.watcher_id
-		WHERE s.watcher_id = ? AND s.value IS NOT NULL ORDER BY s.at DESC LIMIT 1`, id).Scan(&l.Kind, &l.Value)
+	err = s.db.QueryRow(`SELECT kind, value FROM sample WHERE watcher_id = ? AND value IS NOT NULL ORDER BY at DESC LIMIT 1`, id).
+		Scan(&l.Kind, &l.Value)
 	if errors.Is(err, sql.ErrNoRows) {
 		return l, nil
 	}
 	return l, err
 }
 
-// Insert records one check. A value of another kind than the watcher's previous one first drops the
-// watcher's history: the old rows no longer have the new shape.
+// Insert records one check.
 func (s *Store) Insert(id int64, smp Sample) error {
-	tx, err := s.db.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	if smp.Value != nil {
-		var kind string
-		if err := tx.QueryRow(`SELECT kind FROM watcher WHERE id = ?`, id).Scan(&kind); err != nil {
-			return err
-		}
-		if kind != string(smp.Kind) {
-			if _, err := tx.Exec(`DELETE FROM sample WHERE watcher_id = ?`, id); err != nil {
-				return err
-			}
-			if _, err := tx.Exec(`UPDATE watcher SET kind = ? WHERE id = ?`, string(smp.Kind), id); err != nil {
-				return err
-			}
-		}
-	}
-	_, err = tx.Exec(`INSERT INTO sample (watcher_id, at, health, ms, num, changed, value, summary, error)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		id, smp.At.UnixMilli(), smp.Health, smp.MS, smp.Num, smp.Changed, text(smp.Value), text([]byte(smp.Summary)), text([]byte(smp.Error)))
-	if err != nil {
-		return err
-	}
-	return tx.Commit()
+	_, err := s.db.Exec(`INSERT INTO sample (watcher_id, at, health, ms, num, changed, kind, value, summary, error)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		id, smp.At.UnixMilli(), smp.Health, smp.MS, smp.Num, smp.Changed, text([]byte(smp.Kind)), text(smp.Value), text([]byte(smp.Summary)), text([]byte(smp.Error)))
+	return err
 }
 
 // Prune deletes samples older than before, except each watcher's newest stored value before it:

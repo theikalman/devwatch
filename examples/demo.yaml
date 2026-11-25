@@ -1,7 +1,12 @@
-# devwatch demo: every value kind, using only plain shell commands (no Docker or Postgres needed).
+# devwatch demo: every value kind without Docker or Postgres. It watches shell commands, devwatch's own
+# web server, and devwatch's own SQLite history.
 #
+#   go run . -c examples/demo.yaml         serves the dashboard on http://127.0.0.1:7777
 #   go run . check -c examples/demo.yaml   one pass; exits 1 because some watchers are crit or error on purpose
-#   go run . -c examples/demo.yaml         keeps running and prints each change
+#                                          (and the SQLite ones fail until the dashboard has created its history)
+#
+# For containers, add e.g.  - name: my stack
+#                             docker: {compose: my-project}
 title: devwatch demo
 every: 3s
 
@@ -51,7 +56,27 @@ watch:
 
   - name: devwatch port
     group: probes
-    port: 127.0.0.1:7777 # down until the web UI (M2) listens here
+    port: 127.0.0.1:7777
+
+  - name: devwatch page
+    group: probes
+    http: http://127.0.0.1:7777/
+
+  - name: stored checks
+    group: sqlite
+    sql: SELECT count(*) FROM sample
+    dsn: sqlite:.devwatch/data.db # devwatch's own history; any SQLite file works, opened read-only
+    unit: checks
+
+  - name: seconds watcher
+    group: sqlite
+    sql: SELECT key, name, source FROM watcher WHERE key = 'seconds'
+    dsn: sqlite:.devwatch/data.db
+
+  - name: watchers by source
+    group: sqlite
+    sql: SELECT source, count(*) AS watchers FROM watcher GROUP BY source ORDER BY source
+    dsn: sqlite:.devwatch/data.db
 
   - name: slow command
     group: errors

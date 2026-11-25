@@ -1,6 +1,7 @@
 package store
 
 import (
+	"database/sql"
 	"os"
 	"path/filepath"
 	"testing"
@@ -69,11 +70,37 @@ func TestInsertAndLast(t *testing.T) {
 		t.Fatalf("Last = %+v, %v", l, err)
 	}
 
-	// A value of another kind drops the old rows.
+	// A value of another kind keeps the history; each value carries its kind.
 	must(t, s.Insert(id, Sample{At: t0.Add(2 * time.Second), Health: value.OK, Changed: true, Kind: value.Text, Value: []byte(`"x"`)}))
-	if got := s.count(t, id); got != 1 {
-		t.Fatalf("%d rows after kind change, want 1", got)
+	if got := s.count(t, id); got != 3 {
+		t.Fatalf("%d rows after kind change, want 3", got)
 	}
+	if vs, _ := s.Values(id, 2); len(vs) != 2 || vs[0].Kind != value.Text || vs[1].Kind != value.Number {
+		t.Fatalf("Values after kind change = %+v", vs)
+	}
+}
+
+func TestMigratesSharedKind(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "data.db")
+	old, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = old.Exec(`CREATE TABLE watcher (id INTEGER PRIMARY KEY, key TEXT NOT NULL UNIQUE, name TEXT NOT NULL, kind TEXT NOT NULL, source TEXT NOT NULL);
+		CREATE TABLE sample (watcher_id INTEGER NOT NULL REFERENCES watcher(id), at INTEGER NOT NULL, health TEXT NOT NULL, ms INTEGER NOT NULL,
+		  num REAL, changed INTEGER NOT NULL, value TEXT, summary TEXT, error TEXT, PRIMARY KEY (watcher_id, at)) WITHOUT ROWID;
+		INSERT INTO watcher VALUES (1, 'w', 'w', 'number', 'cmd');
+		INSERT INTO sample VALUES (1, 1000, 'ok', 1, 5, 1, '5', '5', NULL);
+		INSERT INTO sample VALUES (1, 2000, 'ok', 1, 5, 0, NULL, NULL, NULL);`)
+	old.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := open(t, path)
+	if l, err := s.Last(1); err != nil || l.Kind != value.Number || string(l.Value) != "5" {
+		t.Fatalf("Last after migration = %+v, %v", l, err)
+	}
+	open(t, path) // a second open finds the column and does nothing
 }
 
 func TestPruneKeepsNewestValue(t *testing.T) {

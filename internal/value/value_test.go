@@ -84,8 +84,8 @@ func TestParseTable(t *testing.T) {
 			}
 		}
 	}
-	big := "n\n" + strings.Repeat("x\n", maxRows+5)
-	if got := parseTable(big); len(got.Rows) != maxRows || !got.Truncated {
+	big := "n\n" + strings.Repeat("x\n", MaxRows+5)
+	if got := parseTable(big); len(got.Rows) != MaxRows || !got.Truncated {
 		t.Errorf("big table: %d rows, truncated=%v", len(got.Rows), got.Truncated)
 	}
 }
@@ -215,3 +215,44 @@ func TestDecodeRoundTrip(t *testing.T) {
 }
 
 func ptr(v Value) *Value { return &v }
+
+func TestRowsAndContainers(t *testing.T) {
+	s := func(v string) *string { return &v }
+	row := func(status string, note *string) Value {
+		return NewRow(RowData{Cols: []string{"id", "status", "note"}, Vals: []*string{s("42"), s(status), note}})
+	}
+	if got := Summary(ptr(row("pending", nil)), row("paid", s("NULL"))); got != "status: pending → paid; note: NULL → NULL" {
+		t.Errorf("row summary = %q", got) // a NULL and the text "NULL" differ
+	}
+	if got := row("paid", nil).String(); got != "id=42 status=paid note=NULL" {
+		t.Errorf("row String = %q", got)
+	}
+
+	c := func(name, state string, exit, restarts int) ContainerData {
+		return ContainerData{Name: name, State: state, ExitCode: exit, Restarts: restarts, Image: "img"}
+	}
+	before := NewContainers([]ContainerData{c("api", "running", 0, 0), c("redis", "running", 0, 0), c("old", "running", 0, 0)})
+	after := NewContainers([]ContainerData{c("api", "running", 0, 1), c("redis", "exited", 137, 0), c("worker", "running", 0, 0)})
+	if got := Summary(&before, after); got != "api: restarts 0 → 1; redis: running → exited (137); +worker (running) (+1 more)" {
+		t.Errorf("containers summary = %q", got)
+	}
+	if after.String() != "2/3 running" {
+		t.Errorf("containers String = %q", after.String())
+	}
+	if h, why := Health(after, nil, nil, nil); h != Crit || why != "redis exited (137)" {
+		t.Errorf("Health = %s %q", h, why)
+	}
+	atLeast2, _ := ParseRule(">= 2")
+	if h, _ := Health(after, nil, nil, atLeast2); h != OK {
+		t.Errorf("with expect, only the running count counts: %s", h)
+	}
+	if h, why := Health(NewContainers(nil), nil, nil, nil); h != Crit || why != "no container matches" {
+		t.Errorf("none = %s %q", h, why)
+	}
+	for _, v := range []Value{row("paid", nil), after} {
+		got, err := Decode(v.Kind, v.JSON())
+		if err != nil || string(got.JSON()) != string(v.JSON()) || got.String() != v.String() {
+			t.Errorf("Decode(%s) = %s, %v", v.Kind, got.JSON(), err)
+		}
+	}
+}
