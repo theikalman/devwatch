@@ -121,6 +121,35 @@ func TestProcessPreset(t *testing.T) {
 	}
 }
 
+func TestS3CountPreset(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "devwatch.yaml")
+	if err := os.WriteFile(p, []byte("watch:\n  - s3.count: uploads\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH")) // a fake aws CLI, ahead of any real one
+	for _, c := range []struct{ name, script, want string }{
+		{"two objects", "printf '2026-11-26 obj a\\n2026-11-26 obj b\\n'", "2"},
+		{"empty bucket", "exit 1", "0"},
+		{"endpoint down", "echo 'Could not connect' >&2; exit 255", "error"},
+	} {
+		if err := os.WriteFile(filepath.Join(dir, "aws"), []byte("#!/bin/sh\n"+c.script+"\n"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		got := "error"
+		if v, err := Fetch(context.Background(), cfg.Watch[0]); err == nil {
+			got = v.String()
+		}
+		if got != c.want {
+			t.Errorf("%s: got %s, want %s", c.name, got, c.want)
+		}
+	}
+}
+
 func TestHTTP(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ok", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(`{"build": {"sha": "abc"}}`)) })

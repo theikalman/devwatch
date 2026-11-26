@@ -128,8 +128,11 @@ WHERE cardinality(pg_blocking_pids(pid)) > 0`}
 				}
 			}
 			return Watcher{Name: p["bucket"] + " objects", Unit: "objects", Env: env,
+				// Not `aws … | wc -l`: the pipeline's status is wc's, so an unreachable endpoint would read as a count.
 				Cmd: `command -v aws >/dev/null || { echo "aws CLI not found" >&2; exit 127; }
-aws --endpoint-url "$DEVWATCH_ENDPOINT" s3 ls "s3://$DEVWATCH_BUCKET/$DEVWATCH_PREFIX" --recursive | wc -l`}
+out=$(aws --endpoint-url "$DEVWATCH_ENDPOINT" s3 ls "s3://$DEVWATCH_BUCKET/$DEVWATCH_PREFIX" --recursive); rc=$?
+[ "$rc" -le 1 ] || exit "$rc" # s3 ls exits 1 when nothing matches
+if [ -z "$out" ]; then echo 0; else printf '%s\n' "$out" | wc -l; fi`}
 		},
 	},
 }
